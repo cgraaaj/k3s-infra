@@ -1,0 +1,3 @@
+append the value   server.insecure: "true" in cm not update which removes the redis config
+to get server default password
+kubectl -n argocd-qa get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo

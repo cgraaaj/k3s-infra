@@ -1,0 +1,23 @@
+authentik:
+    secret_key: "tfxGuuqedOx6REzXLU28ltwwXR2AVjfNWo4jBWgX9kCP47+RqukPahTdTmZDRQzWiYyJz9r2hNbPDs+k"
+    # This sends anonymous usage-data, stack traces on errors and
+    # performance data to sentry.io, and is fully opt-in
+    error_reporting:
+        enabled: true
+    postgresql:
+        password: "eQgh1foRx0WdAjfrstUgoP2N77cv1yR4ACgzdUlYUovqVmCd8D"
+server:
+  podLabels: 
+    app: authentik
+postgresql:
+    enabled: true
+    auth:
+        password: "eQgh1foRx0WdAjfrstUgoP2N77cv1yR4ACgzdUlYUovqVmCd8D"
+    # primary:
+    #     persistence:
+    #         enabled: true
+    #         storageClass: "longhorn"
+    #         accessModes:
+    #             - ReadWriteOnce
+redis:
+    enabled: true

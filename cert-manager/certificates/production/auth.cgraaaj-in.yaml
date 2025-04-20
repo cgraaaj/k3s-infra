@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: authentik-cgraaaj-in
+  namespace: authentik
+spec:
+  secretName: authentik-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "auth.cgraaaj.in"
+  dnsNames:
+  - "auth.cgraaaj.in"

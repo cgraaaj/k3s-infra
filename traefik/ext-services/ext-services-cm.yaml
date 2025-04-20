@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ext-services
+  namespace: traefik
+data:
+  external-services.yaml: |
+    http:
+      middlewares:
+        authentik-forward-auth:
+          forwardAuth:
+            address: "http://ak-outpost-authentik-embedded-outpost.authentik:9000/outpost.goauthentik.io/auth/traefik"
+            trustForwardHeader: true
+            authResponseHeaders:
+              - X-authentik-username
+              - X-authentik-groups
+              - X-authentik-email
+              - X-authentik-name
+              - X-authentik-uid
+              - X-authentik-jwt
+              - X-authentik-meta-jwks
+              - X-authentik-meta-outpost
+              - X-authentik-meta-provider
+              - X-authentik-meta-app
+              - X-authentik-meta-version
+      routers:
+        jellyfin:
+          service: jellyfin
+          rule: "Host(`vrplayer.cgraaaj.in`)"
+        nextcloud:
+          service: nextcloud
+          rule: "Host(`vrcloud.cgraaaj.in`)"
+        bitwarden:
+          service: bitwarden
+          rule: "Host(`vrvault.cgraaaj.in`)"
+        pgdb:
+          service: pgdb
+          rule: "Host(`pgdb.cgraaaj.in`)"
+        pgadmin:
+          service: pgadmin
+          rule: "Host(`pgadmin.cgraaaj.in`)"
+        pve:
+          service: pve
+          rule: "Host(`pve.cgraaaj.in`)"
+        homeassistant:
+          service: homeassistant
+          rule: "Host(`home.cgraaaj.in`)"
+        vrgallery:
+          service: vrgallery
+          rule: "Host(`vrgallery.cgraaaj.in`)"
+        serverstatus:
+          service: serverstatus
+          rule: "Host(`serverstatus.cgraaaj.in`)"
+        homelab:
+          service: homelab
+          rule: "Host(`homelab.cgraaaj.in`)"
+          middlewares:
+            - authentik-forward-auth
+        vscode:
+          service: vscode
+          rule: "Host(`vscode.cgraaaj.in`)"
+          middlewares:
+            - authentik-forward-auth
+        coder:
+          service: coder
+          rule: "Host(`coder.cgraaaj.in`)"
+        bookmark:
+          service: bookmark
+          rule: "Host(`bookmark.cgraaaj.in`)"
+        notes:
+          service: notes
+          rule: "Host(`notes.cgraaaj.in`)"
+        harbor:
+          service: harbor
+          rule: "Host(`registry.cgraaaj.in`)"
+      services:
+        jellyfin:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        nextcloud:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        bitwarden:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        pgdb:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        pgadmin:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        pve:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        homeassistant:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        vrgallery:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        serverstatus:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        homelab:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        vscode:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        coder:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        bookmark:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        notes:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"
+        harbor:
+          loadBalancer:
+            servers:
+              - url: "http://192.168.1.72:80"

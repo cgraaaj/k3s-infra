@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: npm-service
+  namespace: npm
+spec:
+  type: ExternalName
+  externalName: 192.168.1.72
+  ports:
+    - port: 443
+      targetPort: 443
+      protocol: TCP

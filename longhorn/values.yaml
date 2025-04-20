@@ -1,0 +1,44 @@
+global:
+  tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "longhorn"
+    effect: "NoSchedule"
+
+longhornDriver:
+  nodeSelector:
+      longhorn: "true"
+
+longhornUI:
+  nodeSelector:
+    longhorn: "true"
+
+
+defaultSettings:
+  createDefaultDiskLabeledNodes: true
+  # systemManagedComponentsNodeSelector: "longhorn:true"
+  taintToleration: "dedicated=longhorn:NoSchedule"
+
+persistence:
+  defaultClassReplicaCount: 1
+
+csi:
+    # -- Replica count of the CSI Attacher. When unspecified, Longhorn uses the default value ("3").
+    attacherReplicaCount: 2
+    # -- Replica count of the CSI Provisioner. When unspecified, Longhorn uses the default value ("3").
+    provisionerReplicaCount: 2
+    # -- Replica count of the CSI Resizer. When unspecified, Longhorn uses the default value ("3").
+    resizerReplicaCount: 2
+    # -- Replica count of the CSI Snapshotter. When unspecified, Longhorn uses the default value ("3").
+    snapshotterReplicaCount: 2
+
+
+# affinity:
+#   nodeAffinity:
+#     requiredDuringSchedulingIgnoredDuringExecution:
+#       nodeSelectorTerms:
+#         - matchExpressions:
+#             - key: longhorn
+#               operator: In
+#               values:
+#                 - "true"

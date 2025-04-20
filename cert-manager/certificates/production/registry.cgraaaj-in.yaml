@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: registry-cgraaaj-in
+  namespace: harbor
+spec:
+  secretName: registry-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "registry.cgraaaj.in"
+  dnsNames:
+  - "registry.cgraaaj.in"

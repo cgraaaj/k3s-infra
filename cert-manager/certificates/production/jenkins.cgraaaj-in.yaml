@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jenkins-cgraaaj-in
+  namespace: jenkins
+spec:
+  secretName: jenkins-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "jenkins.cgraaaj.in"
+  dnsNames:
+  - "jenkins.cgraaaj.in"

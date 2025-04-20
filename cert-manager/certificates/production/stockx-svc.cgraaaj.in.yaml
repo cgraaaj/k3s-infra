@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stockx-svc-cgraaaj-in
+  namespace: stockx
+spec:
+  secretName: stockx-svc-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "stockx-svc.cgraaaj.in"
+  dnsNames:
+  - "stockx-svc.cgraaaj.in"

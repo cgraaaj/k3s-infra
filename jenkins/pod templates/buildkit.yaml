@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    component: buildkit
+spec:
+  containers:
+    - name: buildkit
+      image: moby/buildkit:latest
+      imagePullPolicy: IfNotPresent
+      command: ["/usr/bin/buildkitd"]
+      args: ["--addr", "tcp://0.0.0.0:1234"]
+      volumeMounts:
+        - name: snapshots
+          mountPath: /var/lib/buildkit
+        - name: docker-config
+          mountPath: /root/.docker/config.json
+          subPath: config.json 
+
+      securityContext:
+        privileged: true   
+        runAsUser: 0        
+        runAsGroup: 0
+        capabilities:
+          add:
+            - SYS_ADMIN       
+            - DAC_READ_SEARCH
+            - MKNOD
+  volumes:
+    - name: snapshots
+      emptyDir: {}
+    - name: docker-config
+      secret:
+        secretName: harbor-credentials
+        items:
+          - key: config.json
+            path: config.json
+

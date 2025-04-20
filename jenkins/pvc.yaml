@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  storageClassName: "longhorn-retain" # Empty string must be explicitly set otherwise default StorageClass will be set
+  volumeName: pvc-a27bfc67-77cd-4003-b32f-e641d906c635
+  accessModes: 
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi  # Must match the PV size

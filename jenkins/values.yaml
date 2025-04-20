@@ -1,0 +1,20 @@
+persistence:
+  storageClass: longhorn-retain
+  size: 20Gi
+  # existingClaim: jenkins
+  volumes:
+    - name: known-hosts-volume
+      configMap:
+        name: jenkins-known-hosts
+  mounts:
+    - name: known-hosts-volume
+      mountPath: /var/jenkins_home/.ssh/known_hosts
+      subPath: known_hosts
+      readOnly: true
+
+agent:
+  volumes:
+    - type: ConfigMap
+      configMapName: jenkins-known-hosts
+      mountPath: /home/jenkins/.ssh/known_hosts
+      subPath: known_hosts

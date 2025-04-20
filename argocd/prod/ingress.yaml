@@ -1,0 +1,29 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-server
+  namespace: argocd
+  annotations:
+    kubernetes.io/ingress.class: traefik-external
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`argocd.cgraaaj.in`)
+      priority: 10
+      services:
+        - name: argocd-server
+          namespace: argocd
+          port: 80
+    - kind: Rule
+      match: Host(`argocd.cgraaaj.in`) && Header(`Content-Type`, `application/grpc`)
+      priority: 11
+      services:
+        - name: argocd-server
+          namespace: argocd-qa
+          port: 80
+          scheme: h2c
+  tls:
+    secretName: argocd-cgraaaj-in-tls

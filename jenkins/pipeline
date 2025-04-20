@@ -1,0 +1,44 @@
+pipeline {
+    agent any
+
+    environment {
+        GIT_REPO = "git@github.com:cgraaaj/jenkins-library.git"
+        GIT_CREDENTIALS_ID = "noobmaster-ssh-credentials"
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "Testing Git checkout using the GitHub bot..."
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: 'main']],
+                        userRemoteConfigs: [[
+                            url: env.GIT_REPO,
+                            credentialsId: env.GIT_CREDENTIALS_ID,
+                            refspec: '+refs/heads/*:refs/remotes/origin/*'
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Commit & Push Test') {
+            steps {
+                script {
+                    echo "Making a test commit..."
+                    sh '''
+                        git config --global user.email "noobmaster@cgraaaj.in"
+                        git config --global user.name "noobmaster"
+                        git checkout -b main  # Create and switch to main
+                        echo "Test commit from Jenkins" > test.txt
+                        git add test.txt
+                        git commit -m "Test commit from Jenkins Bot"
+                        git push origin main
+                    '''
+                }
+            }
+        }
+    }
+}

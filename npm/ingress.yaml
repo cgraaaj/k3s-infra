@@ -1,0 +1,17 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: npm-ingress
+  namespace: npm
+  annotations:
+    kubernetes.io/ingress.class: traefik-external
+spec:
+  entryPoints:
+    - websecure  # Traefik entry point for TLS
+  routes:
+    - match: HostSNI(`pve.cgraaaj.in`)
+      services:
+        - name: npm-service
+          port: 443  # Forward to NPM's HTTPS port
+  tls:
+    passthrough: true  # Let NPM handle the TLS certificates

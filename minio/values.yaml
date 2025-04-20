@@ -1,0 +1,14 @@
+persistence:
+  enabled: true
+  size: 25Gi
+  storageClass: longhorn-retain
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 500m
+  limits:
+    memory: 2Gi
+    cpu: 1
+
+replicas: 2

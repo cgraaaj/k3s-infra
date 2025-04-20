@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  storageClassName: "longhorn-retain"
+  volumeName: pvc-14cf5d86-4536-437d-8d4c-410852dc3eef
+  accessModes: 
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

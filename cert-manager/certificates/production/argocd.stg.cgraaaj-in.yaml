@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-stg-cgraaaj-in
+  namespace: argocd-stg
+spec:
+  secretName: argocd-stg-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "argocd.stg.cgraaaj.in"
+  dnsNames:
+  - "argocd.stg.cgraaaj.in"

@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ignite-config
+  namespace: ignite
+data:
+  default-config.xml: |
+    <ignite xmlns="http://ignite.apache.org/schema/dynamic-config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://ignite.apache.org/schema/dynamic-config https://ignite.apache.org/schema/dynamic-config/dynamic-config.xsd">
+    
+        <!-- Cluster name -->
+        <cluster-name>ignite-cluster</cluster-name>
+    
+        <!-- Network Configuration -->
+        <network>
+            <local-host>0.0.0.0</local-host>
+            <port>47500</port>
+            <port-range>100</port-range>
+        </network>
+    
+        <!-- Discovery Configuration -->
+        <discovery>
+            <spi>
+                <tcp>
+                    <ip-finder>
+                        <static>
+                            <addresses>
+                                <value>ignite-0.ignite:47500..47509</value>
+                                <value>ignite-1.ignite:47500..47509</value>
+                            </addresses>
+                        </static>
+                    </ip-finder>
+                </tcp>
+            </spi>
+        </discovery>
+    
+        <!-- Data storage configuration -->
+        <data-storage>
+            <default-data-region>
+                <name>default</name>
+                <persistence-enabled>true</persistence-enabled>
+                <initial-size>1g</initial-size>
+                <max-size>4g</max-size>
+            </default-data-region>
+        </data-storage>
+    
+        <!-- SQL Configuration -->
+        <sql>
+            <enabled>true</enabled>
+        </sql>
+    </ignite>
