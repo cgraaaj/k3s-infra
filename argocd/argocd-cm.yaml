@@ -73,6 +73,42 @@ data:
       - .spec.template.spec.containers[]?.terminationMessagePath
       - .spec.template.spec.containers[]?.terminationMessagePolicy
 
+  # CustomResourceDefinitions: cert-manager (and cert-manager-like
+  # webhook-ca-injectors) patch the caBundle field on CRD conversion
+  # webhooks at runtime. That's by design — it's how the CA chain
+  # rotates without a re-install. Never treat it as drift.
+  resource.customizations.ignoreDifferences.apiextensions.k8s.io_CustomResourceDefinition: |
+    jqPathExpressions:
+      - .spec.conversion.webhook.clientConfig.caBundle
+      - .metadata.annotations."cert-manager.io/inject-ca-from"
+      - .metadata.annotations."cert-manager.io/inject-ca-from-secret"
+      - .status
+
+  # Validating / Mutating webhooks also get caBundle rotation, and K8s
+  # sometimes flips .failurePolicy between Fail and Ignore depending on
+  # whether the webhook pod is up. Neither is an actionable diff.
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_ValidatingWebhookConfiguration: |
+    jqPathExpressions:
+      - .webhooks[]?.clientConfig.caBundle
+      - .webhooks[]?.failurePolicy
+
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+    jqPathExpressions:
+      - .webhooks[]?.clientConfig.caBundle
+      - .webhooks[]?.failurePolicy
+
+  # Services get .spec.clusterIP / .spec.clusterIPs assigned by the API
+  # server at create time; they're immutable after that so diff noise
+  # here is purely cosmetic.
+  resource.customizations.ignoreDifferences.Service: |
+    jqPathExpressions:
+      - .spec.clusterIP
+      - .spec.clusterIPs
+      - .spec.ipFamilies
+      - .spec.ipFamilyPolicy
+      - .spec.internalTrafficPolicy
+      - .spec.ports[]?.nodePort
+
   # Normalise CPU quantity drift ("1000m" vs "1") for every resource that
   # exposes a PodSpec. ArgoCD's built-in known-type normalisers handle
   # core types when this key lists them explicitly.
