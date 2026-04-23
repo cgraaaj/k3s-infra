@@ -24,7 +24,7 @@ merged so the next engineer knows what's in-flight.
 | **cert-manager**              | `v1.18.6` ⬆ from `v1.17.4` | `v1.20.2` | T3-step-1 | `v1.19.5` → `v1.20.2` |
 | **istio-base / istiod / gateway** | `1.25.5` ⬆ from `1.23.6` | `1.29.2` | T3-step-1 (N-2 skip) | `1.27.x` → `1.29.x` |
 | **longhorn**                  | `1.9.2` ⬆ from `1.8.2`  | `1.11.1` | T3-step-1 | `1.10.x` → `1.11.x` |
-| **authentik**                 | `2025.12.4` ⬆ from `2025.2.4` | `2026.2.2` | T3-step (within-year) | `2026.2.x` (breaking year release) |
+| **authentik**                 | `2025.2.4` (rolled back from `2025.12.4`) | `2026.2.2` | — (stuck on `2025.2.4` — see runbook below) | All future authentik bumps gated on Postgres migration |
 | **traefik**                   | `36.3.0` ⬆ from `34.4.1` | `39.0.8` | T3-step-1 | `37.x` → `38.x` → `39.x` |
 | **kube-prometheus-stack**     | `75.15.2`     | `84.0.0`       | — | T3 — defer, CRD migration needed |
 | **kiali-server**              | `1.89.0`      | `2.25.0`       | — | T3 — v1→v2 full rewrite, defer |
@@ -89,9 +89,64 @@ backend, executor options, metrics). Recommended:
 2. Bump the chart `0.68.1 → 0.80.x` first (still Runner 18.3.x), verify jobs still execute.
 3. Then step to `0.88.1`.
 
-### authentik 2025.12 → 2026.2 (year release — breaking)
-Authentik's yearly release boundary usually bundles database migrations, API deprecations,
-and UI changes. **Back up the PostgreSQL database before the bump.**
+### authentik: PostgreSQL 15 → 17 migration **REQUIRED** before any chart bump past `2025.2.4`
+
+**Trap discovered during `2025.12.4` attempt (2026-04-23):** starting in authentik chart
+`2025.10.x`, the project dropped the bitnami/postgresql subchart (which ships
+`bitnami/postgresql:15.x`) and switched to the upstream `docker.io/library/postgres:17`
+image. The helm upgrade silently changes the postgres image in the StatefulSet, but the
+existing PV is a PG15 data directory, so the new pod crash-loops with:
+
+```
+FATAL: database files are incompatible with server
+DETAIL: The data directory was initialized by PostgreSQL version 15,
+         which is not compatible with this version 17.7
+```
+
+To move past `2025.2.4` you must migrate the data first:
+
+1. **Snapshot** the Longhorn PV backing `data-authentik-postgresql-0` (RTO backup).
+2. Scale authentik-server and authentik-worker to 0 to stop writes.
+3. `kubectl -n authentik exec authentik-postgresql-0 -- pg_dumpall -U authentik > authentik-pg15.sql`
+4. Scale the StatefulSet down, delete the PVC, let Helm re-create with PG17.
+5. `kubectl -n authentik cp authentik-pg15.sql authentik-postgresql-0:/tmp/ && kubectl -n authentik exec -it authentik-postgresql-0 -- psql -U authentik -f /tmp/authentik-pg15.sql`
+6. Scale server + worker back up, verify admin UI.
+7. Then bump chart `2025.2.4 → 2025.12.4 → 2026.2.2`.
+
+**Why automated rollback on this run was non-trivial:** the authentik Application has
+`syncPolicy.automated.selfHeal: true`, which kept pushing the StatefulSet back to the
+new (broken) 2025.12.4 template. We temporarily disabled `selfHeal` on the authentik
+Application CR so the rollback could stick. Re-enable after bootstrap-qa picks up the
+git rollback.
+
+### cert-manager v1.17 → v1.18: needs `Replace=true` sync option
+
+The jetstack chart renders the `Deployment.spec.strategy` field with a `$retainKeys`
+merge directive that trips ArgoCD's SSA (`field not declared in schema`). Solution is to
+sync with `Replace=true` once (fallback to client-side apply):
+
+```
+kubectl -n argocd-qa patch applications.argoproj.io cert-manager --type merge \
+  -p '{"operation":{"sync":{"syncOptions":["RespectIgnoreDifferences=true","Replace=true"]}}}'
+```
+
+Subsequent patch bumps within v1.18 don't need Replace=true again.
+
+### bootstrap-qa (app-of-apps) revision cache
+
+After force-pushing a rollback commit, bootstrap-qa was observed to remain synced at
+the previous revision for > 10 min despite `refresh=hard` annotations and repo-server
+pod restarts. If this happens, options in order of preference:
+
+1. Wait for the 3 min auto-polling cycle.
+2. `kubectl -n argocd-qa rollout restart deployment/argocd-repo-server` to flush the
+   clone cache.
+3. Directly patch the child Application CR's `targetRevision` and (only as a last resort)
+   toggle `syncPolicy.automated.selfHeal: false` on it, to break the selfHeal loop.
+
+### authentik 2025.x → 2026.2 (year release — breaking)
+Authentik's yearly release boundary bundles database migrations, API deprecations,
+and UI changes. **Do the PG15 → 17 migration first (see above), then:**
 
 1. Snapshot the `authentik-postgresql-*` PV via Longhorn.
 2. Review [authentik 2026.2 release notes](https://docs.goauthentik.io/docs/releases).
