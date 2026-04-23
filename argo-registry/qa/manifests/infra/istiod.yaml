@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://istio-release.storage.googleapis.com/charts
     chart: istiod
-    targetRevision: 1.23.6
+    targetRevision: 1.25.5
     helm:
       values: |
         # Optimized for K3s on ARM64
