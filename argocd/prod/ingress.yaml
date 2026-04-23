@@ -22,8 +22,8 @@ spec:
       priority: 11
       services:
         - name: argocd-server
-          namespace: argocd-qa
+          namespace: argocd
           port: 80
           scheme: h2c
   tls:
-    secretName: argocd-cgraaaj-in-tls
+    secretName: wildcard-cgraaaj-in-tls

@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: traefik-dev-cgraaaj-in
+  namespace: traefik
+spec:
+  secretName: traefik-dev-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "traefik.dev.cgraaaj.in"
+  dnsNames:
+  - "traefik.dev.cgraaaj.in"

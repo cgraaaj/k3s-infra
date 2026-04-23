@@ -1,0 +1,24 @@
+server:
+  dataStorage:
+    enabled: true
+    # Size of the PVC created
+    size: 5Gi
+    # Location where the PVC will be mounted.
+    mountPath: "/vault/data"
+    # Name of the storage class to use.  If null it will use the
+    # configured default Storage Class.
+    storageClass: longhorn-retain
+    # Access Mode of the storage device being used for the PVC
+    accessMode: ReadWriteOnce
+
+  auditStorage:
+    enabled: true
+    # Size of the PVC created
+    size: 3Gi
+    # Location where the PVC will be mounted.
+    mountPath: "/vault/audit"
+    # Name of the storage class to use.  If null it will use the
+    # configured default Storage Class.
+    storageClass: longhorn-retain
+    # Access Mode of the storage device being used for the PVC
+    accessMode: ReadWriteOnce

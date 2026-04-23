@@ -1,0 +1,30 @@
+# ---- Secrets (never commit) ----
+# Registry pull secret (robot token)
+argo-registry/dockerconfig.json
+# Any file named like a secret manifest
+**/secret-*.yaml
+**/*-secret.yaml
+# Env files
+*.env
+.env
+.env.*
+# Cloud credentials / kubeconfigs left in the tree
+kubeconfig
+*.kubeconfig
+credentials.json
+**/service-account-*.json
+
+# ---- Editor / OS metadata ----
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+*.iml
+
+# ---- Backups / scratch ----
+*.bak
+*.orig
+*.tmp
+*~

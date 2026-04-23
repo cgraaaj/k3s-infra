@@ -1,20 +1,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: stockx-svc
+  name: optionscope
   namespace: argocd-qa
 spec:
   project: apps
   source:
-    repoURL: https://github.com/cgraaaj/stockx-svc-k8s.git
-    path: .
-    targetRevision: main
+    repoURL: https://github.com/cgraaaj/optionscope.git
+    path: k8s
+    targetRevision: master
     helm:
       valueFiles:
         - values-qa.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: stockx
+    namespace: optionscope
   syncPolicy:
     syncOptions:
       - CreateNamespace=true

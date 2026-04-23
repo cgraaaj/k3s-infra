@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hashicorpvault
+  namespace: argocd-qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infrastructure
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: 0.30.1
+    helm:
+      releaseName: hashicorpvault
+      values: |
+        server:
+          dataStorage:
+            enabled: true
+            size: 5Gi
+            mountPath: "/vault/data"
+            storageClass: longhorn-retain
+            accessMode: ReadWriteOnce
+          auditStorage:
+            enabled: true
+            size: 3Gi
+            mountPath: "/vault/audit"
+            storageClass: longhorn-retain
+            accessMode: ReadWriteOnce
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hashicorpvault
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: false
+      selfHeal: true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,43 @@
+---
+# Alert Router Ingress - for external access (Uptime Kuma, etc.)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: alert-router-ingress
+  namespace: monitoring
+  annotations:
+    kubernetes.io/ingress.class: traefik-external
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`alert-router.dev.cgraaaj.in`)
+      kind: Rule
+      services:
+        - name: alert-router
+          port: 8080
+  tls:
+    secretName: wildcard-dev-cgraaaj-in-tls
+
+---
+# Optional: HTTP to HTTPS redirect
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: alert-router-ingress-http
+  namespace: monitoring
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`alert-router.dev.cgraaaj.in`)
+      kind: Rule
+      services:
+        - name: alert-router
+          port: 8080
+      middlewares:
+        - name: redirect-https
+          namespace: default
+
+
+

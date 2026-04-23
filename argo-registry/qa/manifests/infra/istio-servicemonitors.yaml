@@ -1,0 +1,40 @@
+# Istio ServiceMonitors - to be applied manually or via your GitOps repo
+# These configure Prometheus Operator to scrape Istio metrics
+#
+# To deploy manually:
+#   kubectl apply -f /home/cgraaaj/Projects/k3s-projects/monitoring/istio-servicemonitors/
+#
+# Or add to your GitOps repo and create an ArgoCD app for:
+#   path: monitoring/istio-servicemonitors
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-servicemonitors
+  namespace: argocd-qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infrastructure
+  source:
+    # Update this to your actual GitOps repo where you'll push the monitoring folder
+    # For now, you can apply the ServiceMonitors manually from monitoring/istio-servicemonitors/
+    repoURL: https://github.com/cgraaaj/k3s-projects.git
+    path: monitoring/istio-servicemonitors
+    targetRevision: main  # or master, depending on your default branch
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+

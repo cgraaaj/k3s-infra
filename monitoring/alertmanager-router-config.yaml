@@ -1,0 +1,139 @@
+# Alertmanager Configuration for Custom Alert Router
+# Routes alerts to custom router instead of directly to Discord
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-prometheus-alertmanager
+  namespace: monitoring
+type: Opaque
+stringData:
+  alertmanager.yaml: |
+    global:
+      resolve_timeout: 5m
+    
+    # Inhibition rules - suppress dependent alerts
+    inhibit_rules:
+    # If a node is down, don't alert on pods on that node
+    - source_match:
+        alertname: 'K3sNodeNotReady'
+        severity: 'critical'
+      target_match:
+        severity: 'warning'
+      equal: ['kubernetes_node']
+    
+    # If server is down, don't alert on high CPU/memory
+    - source_match:
+        alertname: 'ServerDown'
+        severity: 'critical'
+      target_match_re:
+        alertname: 'Server(HighCPU|HighMemory)'
+      equal: ['instance']
+    
+    # If Istio control plane is down, suppress Istio data plane alerts
+    - source_match:
+        alertname: 'IstiodDown'
+        severity: 'critical'
+      target_match:
+        component: 'istio'
+      equal: ['cluster']
+    
+    # Main routing tree
+    route:
+      receiver: 'alert-router-default'
+      group_by: ['alertname', 'cluster', 'component']
+      group_wait: 30s          # Wait to batch similar alerts
+      group_interval: 5m       # Send updates every 5 min
+      repeat_interval: 4h      # Re-send unresolved alerts every 4h
+      
+      routes:
+      # CRITICAL INFRASTRUCTURE ALERTS (immediate)
+      - match:
+          severity: critical
+          component: infrastructure
+        receiver: 'alert-router-critical'
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 30m
+        continue: false
+      
+      # CRITICAL KUBERNETES ALERTS
+      - match:
+          severity: critical
+          component: kubernetes
+        receiver: 'alert-router-critical'
+        group_wait: 10s
+        group_interval: 2m
+        repeat_interval: 1h
+        continue: false
+      
+      # ALL OTHER CRITICAL ALERTS
+      - match:
+          severity: critical
+        receiver: 'alert-router-critical'
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 2h
+        continue: false
+      
+      # WARNING ALERTS (batched, less frequent)
+      - match:
+          severity: warning
+        receiver: 'alert-router-warning'
+        group_wait: 2m
+        group_interval: 10m
+        repeat_interval: 12h
+      
+      # ISTIO-specific alerts
+      - match:
+          component: istio
+        receiver: 'alert-router-istio'
+        group_by: ['alertname', 'namespace']
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: 4h
+      
+      # PERFORMANCE alerts
+      - match:
+          component: performance
+        receiver: 'alert-router-performance'
+        group_wait: 5m
+        group_interval: 15m
+        repeat_interval: 24h
+    
+    # Receivers - all point to custom alert router
+    receivers:
+    # Critical alerts
+    - name: 'alert-router-critical'
+      webhook_configs:
+      - url: 'http://alert-router.monitoring.svc.cluster.local:8080/webhook/alertmanager'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+    
+    # Warning alerts
+    - name: 'alert-router-warning'
+      webhook_configs:
+      - url: 'http://alert-router.monitoring.svc.cluster.local:8080/webhook/alertmanager'
+        send_resolved: true
+    
+    # Istio alerts
+    - name: 'alert-router-istio'
+      webhook_configs:
+      - url: 'http://alert-router.monitoring.svc.cluster.local:8080/webhook/alertmanager'
+        send_resolved: true
+    
+    # Performance alerts
+    - name: 'alert-router-performance'
+      webhook_configs:
+      - url: 'http://alert-router.monitoring.svc.cluster.local:8080/webhook/alertmanager'
+        send_resolved: true
+    
+    # Default fallback
+    - name: 'alert-router-default'
+      webhook_configs:
+      - url: 'http://alert-router.monitoring.svc.cluster.local:8080/webhook/alertmanager'
+        send_resolved: true
+
+

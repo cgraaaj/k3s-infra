@@ -5,8 +5,11 @@ globalArguments:
 additionalArguments:
   - "--serversTransport.insecureSkipVerify=true"
   - "--log.level=DEBUG"
-  # for external service file providers config
-  - "--providers.file.directory=/config"
+  # NOTE: external file provider removed (2026-04-23). The orphaned
+  # ext-services ConfigMap defined routes for hosts (homelab, gallery,
+  # player, vault, ...) that are actually served by the main Docker
+  # Traefik on the host. Single source of truth lives there.
+  # - "--providers.file.directory=/config"
   # stream line access logs and traefik logs to log files 
   # followed this https://community.traefik.io/t/how-can-i-write-access-log-as-file-in-k8s-ingress-installed-by-helm-chart/14119/5
   # - "--log.filepath=/var/log/traefik/traefik.log"
@@ -48,6 +51,17 @@ ports:
   web: 
     expose:
       default: true
+    # Trust X-Forwarded-* headers coming from upstream proxies on the LAN
+    # (the main Docker Traefik at 10.19.94.72 chains forward-auth calls to
+    # this K8s Traefik). Without this, K8s Traefik REWRITES X-Forwarded-Host
+    # to its own service Host, which makes Authentik's forward_domain outpost
+    # record `auth.dev.cgraaaj.in` as the post-login redirect destination
+    # instead of the actual origin (e.g. homelab.cgraaaj.in). That manifests
+    # as "redirected to Authentik main page after login" for every protected
+    # app served via the Docker Traefik -> K8s Authentik hairpin.
+    forwardedHeaders:
+      trustedIPs:
+        - "10.19.94.0/24"
   websecure:
     expose:
       default: true
@@ -56,6 +70,9 @@ ports:
     advertisedPort: 4443
     tls:
       enabled: true
+    forwardedHeaders:
+      trustedIPs:
+        - "10.19.94.0/24"
 
 ingressRoute:
   dashboard:
@@ -97,10 +114,13 @@ providers:
 #     # -- Enable traefik experimental GatewayClass CRD
 #     enabled: true
 
-volumes:
-  - name: ext-services
-    mountPath: "/config"
-    type: configMap
+# volumes:
+#   - name: ext-services
+#     mountPath: "/config"
+#     type: configMap
+# Removed alongside --providers.file.directory above. Re-enable only if
+# the dev cluster genuinely needs to serve a host directly (not via the
+# main Traefik), and only after creating a fresh, narrowly-scoped CM.
 
 logs:
   general:
@@ -118,7 +138,15 @@ service:
   annotations: {}
   labels: {}
   spec:
-    loadBalancerIP: 192.168.1.32 # this should be an IP in the MetalLB range
+    loadBalancerIP: 10.19.94.181 # dev cluster Traefik LB in MetalLB range (181-200)
+    # Preserve real client IP on ingress (no kube-proxy SNAT). Required so that
+    # forwardedHeaders.trustedIPs below can actually match the upstream Docker
+    # Traefik (10.19.94.72). With the default `Cluster` policy, kube-proxy SNATs
+    # to a pod-network node IP (10.42.x.0) and the trust list would have to
+    # include the pod CIDR, which would let any pod in the cluster forge
+    # X-Forwarded-* headers. Caveat: only nodes running a Traefik pod answer
+    # the LB VIP; MetalLB L2 reconciles within a few seconds on pod moves.
+    externalTrafficPolicy: Local
   loadBalancerSourceRanges: []
   externalIPs: []
 

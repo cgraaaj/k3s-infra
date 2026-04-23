@@ -1,0 +1,117 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: server-down-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus  # Match your kube-prometheus-stack release name
+spec:
+  groups:
+  - name: server-availability
+    interval: 30s
+    rules:
+    # Alert when any node_exporter is down
+    - alert: ServerDown
+      expr: up{job="node-exporter"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        component: infrastructure
+      annotations:
+        summary: "Server {{ $labels.instance }} is down"
+        description: "Server {{ $labels.instance }} has been unreachable for more than 2 minutes.\nNode: {{ $labels.kubernetes_node }}\nJob: {{ $labels.job }}"
+    
+    # Alert when K3s node is NotReady
+    - alert: K3sNodeNotReady
+      expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        component: kubernetes
+      annotations:
+        summary: "K3s node {{ $labels.node }} is not ready"
+        description: "K3s node {{ $labels.node }} has been in NotReady state for more than 2 minutes."
+    
+    # Alert when server CPU is too high (bonus)
+    - alert: ServerHighCPU
+      expr: 100 - (avg by (instance, kubernetes_node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+      for: 5m
+      labels:
+        severity: warning
+        component: performance
+      annotations:
+        summary: "High CPU usage on {{ $labels.instance }}"
+        description: "CPU usage is above 90% for more than 5 minutes on {{ $labels.kubernetes_node }}"
+    
+    # Alert when server memory is too high (bonus)
+    - alert: ServerHighMemory
+      expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+      for: 5m
+      labels:
+        severity: warning
+        component: performance
+      annotations:
+        summary: "High memory usage on {{ $labels.instance }}"
+        description: "Memory usage is above 90% for more than 5 minutes on {{ $labels.kubernetes_node }}"
+
+  - name: pod-availability
+    interval: 30s
+    rules:
+    # Alert when pod restarts frequently
+    - alert: PodCrashLooping
+      expr: increase(kube_pod_container_status_restarts_total[10m]) > 3
+      for: 1m
+      labels:
+        severity: critical
+        component: kubernetes
+      annotations:
+        summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+        description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has restarted {{ $value }} times in the last 10 minutes."
+
+    # Alert when pod is not ready
+    - alert: PodNotReady
+      expr: kube_pod_status_ready{condition="true"} == 0
+      for: 5m
+      labels:
+        severity: warning
+        component: kubernetes
+      annotations:
+        summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is not ready"
+        description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 5 minutes."
+
+    # Alert when deployment has unavailable replicas
+    - alert: DeploymentReplicasMismatch
+      expr: kube_deployment_status_replicas_available != kube_deployment_spec_replicas
+      for: 5m
+      labels:
+        severity: warning
+        component: kubernetes
+      annotations:
+        summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} replicas mismatch"
+        description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has {{ $value }} available replicas, expected {{ $labels.spec_replicas }}."
+
+    # Alert when deployment has zero replicas
+    - alert: DeploymentDown
+      expr: kube_deployment_status_replicas_available == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: kubernetes
+      annotations:
+        summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has 0 replicas"
+        description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has no available replicas for more than 1 minute."
+
+    # Alert when container OOM killed
+    - alert: ContainerOOMKilled
+      expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+      for: 0m
+      labels:
+        severity: critical
+        component: kubernetes
+      annotations:
+        summary: "Container {{ $labels.container }} OOM killed in {{ $labels.namespace }}/{{ $labels.pod }}"
+        description: "Container {{ $labels.container }} in pod {{ $labels.pod }} (namespace: {{ $labels.namespace }}) was OOM killed."
+
+
+
+

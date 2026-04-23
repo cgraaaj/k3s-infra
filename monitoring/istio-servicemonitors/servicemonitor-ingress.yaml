@@ -1,0 +1,25 @@
+# ServiceMonitor for Istio Ingress Gateway
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istio-ingressgateway
+  namespace: istio-system
+  labels:
+    release: prometheus  # Important: matches your kube-prometheus-stack release name
+spec:
+  selector:
+    matchLabels:
+      app: istio-ingressgateway
+  endpoints:
+  - port: http-envoy-prom
+    interval: 30s
+    path: /stats/prometheus
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod_name
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+
+
+
+

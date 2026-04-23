@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kiali-dev-cgraaaj-in
+  namespace: istio-system
+spec:
+  secretName: kiali-dev-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "kiali.dev.cgraaaj.in"
+  dnsNames:
+  - "kiali.dev.cgraaaj.in"

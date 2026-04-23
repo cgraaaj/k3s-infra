@@ -1,0 +1,158 @@
+# Example Istio Gateway and VirtualService for mediaradar application
+# 
+# These manifests should be added to your mediaradar repository:
+# https://github.com/cgraaaj/mediaradar.git
+# 
+# Suggested location: k8s/istio-gateway.yaml
+# Then they will be deployed automatically by ArgoCD
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: mediaradar-gateway
+  namespace: mediaradar
+spec:
+  selector:
+    istio: ingressgateway  # Use Istio's default ingress gateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "mediaradar-qa.local"  # Change to your domain
+    - "mediaradar-qa.example.com"
+    # For HTTPS, add:
+    # tls:
+    #   mode: SIMPLE
+    #   credentialName: mediaradar-tls-cert  # Reference to Secret with TLS cert
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: mediaradar-routes
+  namespace: mediaradar
+spec:
+  hosts:
+  - "mediaradar-qa.local"
+  - "mediaradar-qa.example.com"
+  gateways:
+  - mediaradar-gateway
+  http:
+  # API routes
+  - match:
+    - uri:
+        prefix: /api/v1
+    route:
+    - destination:
+        host: mediaradar-api  # Your Kubernetes service name
+        port:
+          number: 8080
+    # Traffic management
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    timeout: 10s
+    # CORS policy (if needed)
+    corsPolicy:
+      allowOrigins:
+      - exact: "https://mediaradar-qa.example.com"
+      allowMethods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      allowHeaders:
+      - content-type
+      - authorization
+      maxAge: 24h
+  
+  # Frontend/web routes (if applicable)
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: mediaradar-web  # Your frontend service
+        port:
+          number: 3000
+    timeout: 30s
+
+---
+# Optional: DestinationRule for advanced traffic policies
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: mediaradar-api
+  namespace: mediaradar
+spec:
+  host: mediaradar-api
+  trafficPolicy:
+    # Connection pool settings
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+    # Load balancer settings
+    loadBalancer:
+      simple: LEAST_REQUEST
+    # Circuit breaker
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 40
+  
+  # Optional: Define subsets for canary/blue-green deployments
+  # subsets:
+  # - name: v1
+  #   labels:
+  #     version: v1
+  # - name: v2
+  #   labels:
+  #     version: v2
+
+---
+# Optional: PeerAuthentication to enforce mTLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: mediaradar-mtls
+  namespace: mediaradar
+spec:
+  mtls:
+    mode: STRICT  # Enforce mutual TLS between all services
+
+---
+# Optional: AuthorizationPolicy for access control
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: mediaradar-authz
+  namespace: mediaradar
+spec:
+  # Allow all traffic by default (customize as needed)
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["mediaradar", "istio-system"]
+  # Example: Deny external traffic to specific paths
+  # - action: DENY
+  #   to:
+  #   - operation:
+  #       paths: ["/admin/*"]
+  #   from:
+  #   - source:
+  #       notNamespaces: ["mediaradar"]
+
+
+
+

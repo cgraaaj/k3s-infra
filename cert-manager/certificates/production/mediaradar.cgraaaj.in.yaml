@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mediaradar-cgraaaj-in
+  namespace: mediaradar
+spec:
+  secretName: mediaradar-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "mediaradar.cgraaaj.in"
+  dnsNames:
+    - "mediaradar.cgraaaj.in"

@@ -1,0 +1,52 @@
+# Alert message templates for better formatting
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-templates
+  namespace: monitoring
+data:
+  default.tmpl: |
+    {{ define "__alertmanager" }}AlertManager{{ end }}
+    {{ define "__alertmanagerURL" }}{{ .ExternalURL }}/#/alerts?receiver={{ .Receiver }}{{ end }}
+    
+    {{ define "__subject" }}
+    [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.SortedPairs.Values | join " " }}
+    {{ end }}
+    
+    {{ define "__description" }}
+    {{ end }}
+    
+    {{ define "__text_alert_list" }}
+    {{ range . }}
+    **Alert:** {{ .Labels.alertname }}
+    **Severity:** {{ .Labels.severity }}
+    **Summary:** {{ .Annotations.summary }}
+    **Description:** {{ .Annotations.description }}
+    {{ if .Labels.instance }}**Instance:** {{ .Labels.instance }}{{ end }}
+    {{ if .Labels.kubernetes_node }}**Node:** {{ .Labels.kubernetes_node }}{{ end }}
+    {{ if .Labels.namespace }}**Namespace:** {{ .Labels.namespace }}{{ end }}
+    {{ if .Labels.pod }}**Pod:** {{ .Labels.pod }}{{ end }}
+    **Started:** {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}
+    {{ if .EndsAt }}**Ended:** {{ .EndsAt.Format "2006-01-02 15:04:05 MST" }}{{ end }}
+    ---
+    {{ end }}
+    {{ end }}
+    
+    {{ define "discord.default.title" }}
+    {{ if eq .Status "firing" }}🔥 {{ .Alerts.Firing | len }} Alert(s) Firing{{ else }}✅ {{ .Alerts.Resolved | len }} Alert(s) Resolved{{ end }}
+    {{ end }}
+    
+    {{ define "discord.default.description" }}
+    {{ if gt (len .Alerts.Firing) 0 }}
+    **Firing Alerts:**
+    {{ template "__text_alert_list" .Alerts.Firing }}
+    {{ end }}
+    {{ if gt (len .Alerts.Resolved) 0 }}
+    **Resolved Alerts:**
+    {{ template "__text_alert_list" .Alerts.Resolved }}
+    {{ end }}
+    {{ end }}
+
+
+
+

@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: hashicorpvault-cgraaaj-in
+  namespace: hashicorpvault
+spec:
+  secretName: hashicorpvault-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "hashicorpvault.cgraaaj.in"
+  dnsNames:
+    - "hashicorpvault.cgraaaj.in"

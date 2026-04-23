@@ -1,0 +1,69 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kiali-server
+  namespace: argocd-qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infrastructure
+  source:
+    repoURL: https://kiali.org/helm-charts
+    chart: kiali-server
+    targetRevision: 1.89.0
+    helm:
+      values: |
+        # Kiali configuration for Istio observability
+        auth:
+          strategy: anonymous  # For demo/QA - use token or OIDC in production
+        
+        deployment:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          
+          # No nodeSelector needed - workers have no taints
+        
+        # External services configuration
+        external_services:
+          custom_dashboards:
+            enabled: true
+          istio:
+            root_namespace: istio-system
+          prometheus:
+            url: http://prometheus-prometheus.monitoring.svc.cluster.local:9090
+          grafana:
+            enabled: true
+            in_cluster_url: http://grafana.monitoring.svc.cluster.local:80
+            url: https://grafana.dev.cgraaaj.in
+          tracing:
+            enabled: false  # Can enable Jaeger later
+        
+        # Service configuration
+        server:
+          web_root: /kiali
+          web_fqdn: kiali-qa.local
+        
+        # Expose via LoadBalancer (or use Istio Gateway later)
+        service:
+          type: LoadBalancer
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+

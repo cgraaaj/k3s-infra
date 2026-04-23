@@ -1,0 +1,81 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":automergeMinor",
+    "schedule:weekends"
+  ],
+  "argocd": {
+    "fileMatch": [
+      "argo-registry/.+\\.yaml$"
+    ]
+  },
+  "helm-values": {
+    "fileMatch": [
+      "(^|/)values\\.yaml$",
+      "(^|/)values-.+\\.yaml$"
+    ]
+  },
+  "kubernetes": {
+    "fileMatch": [
+      "(^|/)manifests/.+\\.yaml$"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Auto-merge patch updates for all packages",
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Auto-merge minor updates (dev cluster)",
+      "matchUpdateTypes": ["minor"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Require manual review for major updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update"]
+    },
+    {
+      "description": "Group all ArgoCD infra chart updates together",
+      "matchFileNames": ["argo-registry/qa/manifests/infra/**"],
+      "groupName": "infrastructure-charts",
+      "groupSlug": "infra-charts"
+    },
+    {
+      "description": "Group monitoring stack updates",
+      "matchPackageNames": [
+        "kube-prometheus-stack",
+        "loki-stack",
+        "grafana"
+      ],
+      "groupName": "monitoring-stack",
+      "groupSlug": "monitoring"
+    },
+    {
+      "description": "Limit Longhorn to patch updates only (storage is critical)",
+      "matchPackageNames": ["longhorn"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "labels": ["storage-critical"]
+    },
+    {
+      "description": "Limit Vault to patch updates only (secrets are critical)",
+      "matchPackageNames": ["vault"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "labels": ["security-critical"]
+    }
+  ],
+  "ignoreDeps": [
+    "fleet-agent-rpi-k3s",
+    "system-upgrade-controller"
+  ]
+}

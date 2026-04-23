@@ -26,4 +26,4 @@ spec:
           port: 80
           scheme: h2c
   tls:
-    secretName: argocd-qa-cgraaaj-in-tls
+    secretName: wildcard-cgraaaj-in-tls

@@ -4,13 +4,13 @@ kind: IngressRoute
 metadata:
   name: grafana-ingress
   namespace: monitoring
-  annotations: 
+  annotations:
     kubernetes.io/ingress.class: traefik-external
 spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`grafana.cgraaaj.in`)
+    - match: Host(`grafana.dev.cgraaaj.in`)
       kind: Rule
       services:
         - name: grafana
@@ -38,4 +38,4 @@ spec:
     #         name: ak-outpost-authentik-embedded-outpost
     #         port: 9000
   tls:
-    secretName: grafana-cgraaaj-in-tls
+    secretName: wildcard-dev-cgraaaj-in-tls

@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-image-updater
+  namespace: argocd-qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infrastructure
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argocd-image-updater
+    targetRevision: 1.1.5
+    helm:
+      values: |
+        config:
+          argocd:
+            grpcWeb: true
+            serverAddress: "https://argocd-server.argocd-qa.svc.cluster.local"
+            insecure: true
+            plaintext: false
+          registries:
+            - name: Harbor Private Registry
+              api_url: https://registry.cgraaaj.in
+              prefix: registry.cgraaaj.in
+              ping: true
+              credentials: pullsecret:argocd-qa/regcred
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd-qa
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: false
+      selfHeal: true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

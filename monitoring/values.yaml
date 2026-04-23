@@ -4,7 +4,7 @@ defaultRules:
   create: true
   rules:
     alertmanager: true
-    etcd: true
+    etcd: false  # K3s embedded etcd doesn't expose metrics - disables false positive alerts
     configReloaders: true
     general: true
     k8s: true
@@ -85,8 +85,8 @@ kubelet:
 kubeControllerManager:
   enabled: true
   endpoints: # ips of servers 
-    - 192.168.1.67
-    - 192.168.1.68
+    - 10.19.94.151
+    - 10.19.94.152
 
 coreDns:
   enabled: true
@@ -95,26 +95,19 @@ kubeDns:
   enabled: false
 
 kubeEtcd:
-  enabled: true
-  endpoints: # ips of servers
-    - 192.168.1.67
-    - 192.168.1.68
-  service:
-    enabled: true
-    port: 2381
-    targetPort: 2381
+  enabled: false  # K3s embedded etcd requires mTLS and doesn't expose metrics on standard ports
 
 kubeScheduler:
   enabled: true
   endpoints: # ips of servers
-    - 192.168.1.67
-    - 192.168.1.68
+    - 10.19.94.151
+    - 10.19.94.152
 
 kubeProxy:
   enabled: true
   endpoints: # ips of servers
-    - 192.168.1.67
-    - 192.168.1.68
+    - 10.19.94.151
+    - 10.19.94.152
 
 kubeStateMetrics:
   enabled: true

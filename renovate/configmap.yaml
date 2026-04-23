@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: renovate-config
+  namespace: renovate
+data:
+  config.json: |
+    {
+      "platform": "github",
+      "repositories": [
+        "cgraaaj/k3s-infra"
+      ],
+      "gitAuthor": "Renovate Bot <renovate@cgraaaj.in>",
+      "onboarding": false,
+      "requireConfig": "optional",
+      "enabledManagers": [
+        "argocd",
+        "helm-values",
+        "kubernetes",
+        "regex"
+      ]
+    }

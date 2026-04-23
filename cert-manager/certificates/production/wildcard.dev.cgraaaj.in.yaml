@@ -1,0 +1,17 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-dev-cgraaaj-in
+  namespace: cert-manager
+spec:
+  secretName: wildcard-dev-cgraaaj-in-tls
+  secretTemplate:
+    annotations:
+      replicator.v1/replicate-to: "authentik,istio-system,monitoring,stockx,traefik"
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "*.dev.cgraaaj.in"
+  dnsNames:
+    - "*.dev.cgraaaj.in"

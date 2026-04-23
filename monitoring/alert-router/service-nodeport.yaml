@@ -1,0 +1,23 @@
+---
+# Alert Router NodePort Service - for external access without ingress
+# Accessible via any node IP on port 30808
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-router-nodeport
+  namespace: monitoring
+  labels:
+    app: alert-router
+spec:
+  type: NodePort
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    nodePort: 30808  # Accessible on all K3s nodes at port 30808
+    protocol: TCP
+  selector:
+    app: alert-router
+
+
+

@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: grafana-dev-cgraaaj-in
+  namespace: monitoring
+spec:
+  secretName: grafana-dev-cgraaaj-in-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "grafana.dev.cgraaaj.in"
+  dnsNames:
+    - "grafana.dev.cgraaaj.in"

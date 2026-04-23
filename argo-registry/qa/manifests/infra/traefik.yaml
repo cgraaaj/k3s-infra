@@ -1,0 +1,93 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik
+  namespace: argocd-qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infrastructure
+  source:
+    repoURL: https://traefik.github.io/charts
+    chart: traefik
+    targetRevision: 34.4.1
+    helm:
+      values: |
+        globalArguments:
+          - "--global.sendanonymoususage=false"
+          - "--global.checknewversion=false"
+        additionalArguments:
+          - "--serversTransport.insecureSkipVerify=true"
+          - "--log.level=DEBUG"
+        deployment:
+          enabled: true
+          replicas: 1
+          annotations: {}
+          podAnnotations: {}
+          additionalContainers: []
+          initContainers: []
+        ports:
+          web:
+            expose:
+              default: true
+            forwardedHeaders:
+              trustedIPs:
+                - "10.19.94.0/24"
+          websecure:
+            expose:
+              default: true
+            http3:
+              enabled: true
+            advertisedPort: 4443
+            tls:
+              enabled: true
+            forwardedHeaders:
+              trustedIPs:
+                - "10.19.94.0/24"
+        ingressRoute:
+          dashboard:
+            enabled: false
+        providers:
+          kubernetesCRD:
+            enabled: true
+            ingressClass: traefik-external
+            allowExternalNameServices: true
+            allowCrossNamespace: true
+          kubernetesIngress:
+            enabled: true
+            allowExternalNameServices: true
+            publishedService:
+              enabled: false
+        logs:
+          general:
+            level: INFO
+          access:
+            enabled: true
+            format: json
+        rbac:
+          enabled: true
+        service:
+          enabled: true
+          type: LoadBalancer
+          annotations: {}
+          labels: {}
+          spec:
+            loadBalancerIP: 10.19.94.181
+            externalTrafficPolicy: Local
+          loadBalancerSourceRanges: []
+          externalIPs: []
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: traefik
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: false
+      selfHeal: true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

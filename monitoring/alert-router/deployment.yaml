@@ -1,0 +1,114 @@
+# Discord webhooks secret is created separately via setup.sh
+# Do NOT store webhook URLs in this file
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-router
+  namespace: monitoring
+  labels:
+    app: alert-router
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: alert-router
+  template:
+    metadata:
+      labels:
+        app: alert-router
+    spec:
+      imagePullSecrets:
+      - name: registry-credentials  # Add your registry secret name here
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: alert-router
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: alert-router
+        image: registry.cgraaaj.in/observability/alert-router:latest
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: DISCORD_WEBHOOK_CRITICAL
+          valueFrom:
+            secretKeyRef:
+              name: discord-webhooks
+              key: critical
+        - name: DISCORD_WEBHOOK_WARNING
+          valueFrom:
+            secretKeyRef:
+              name: discord-webhooks
+              key: warning
+        - name: DISCORD_WEBHOOK_INFO
+          valueFrom:
+            secretKeyRef:
+              name: discord-webhooks
+              key: info
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+# Alert Router Service - ClusterIP for internal cluster access
+# For external access (e.g., Uptime Kuma on separate host):
+#   - Use service-nodeport.yaml for NodePort access
+#   - Or use ingress.yaml for Ingress access
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-router
+  namespace: monitoring
+  labels:
+    app: alert-router
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: alert-router
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: alert-router
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: alert-router
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
