@@ -19,7 +19,8 @@
   },
   "kubernetes": {
     "fileMatch": [
-      "(^|/)manifests/.+\\.yaml$"
+      "(^|/)manifests/.+\\.yaml$",
+      "^renovate/cronjob\\.yaml$"
     ]
   },
   "packageRules": [
@@ -38,10 +39,35 @@
       "platformAutomerge": true
     },
     {
-      "description": "Require manual review for major updates",
+      "description": "Require manual review for major updates; gate behind the Dependency Dashboard checkbox so PRs only open when explicitly requested",
       "matchUpdateTypes": ["major"],
       "automerge": false,
+      "dependencyDashboardApproval": true,
       "labels": ["major-update"]
+    },
+    {
+      "description": "Istio only supports skipping at most 2 minor versions (N-2 rule). Step minors one-by-one via the Dependency Dashboard; never auto-merge.",
+      "matchPackageNames": ["base", "istiod", "gateway"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "labels": ["istio-upgrade", "service-mesh-critical"]
+    },
+    {
+      "description": "kube-prometheus-stack bundles the operator + CRDs. Step minors manually; CRD upgrades can break ServiceMonitors.",
+      "matchPackageNames": ["kube-prometheus-stack"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "labels": ["monitoring-critical"]
+    },
+    {
+      "description": "Authentik releases yearly breaking versions (2024.x -> 2025.x -> 2026.x). Always require human review.",
+      "matchPackageNames": ["authentik"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "labels": ["auth-critical"]
     },
     {
       "description": "Group all ArgoCD infra chart updates together",

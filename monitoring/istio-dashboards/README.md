@@ -1,192 +1,259 @@
-# Istio Grafana Dashboards
+# Istio Observability Stack
 
-Official Istio dashboards for Grafana.
+This directory holds the **Istio Grafana dashboards** that visualise the metrics scraped
+by Prometheus from the Istio mesh. It is one of three collaborating pieces in the
+monitoring pipeline — see [How it works](#how-it-works) below.
 
-## Import Dashboards to Your Existing Grafana
+> **For new developers**: start with the [TL;DR onboarding](#tldr-onboarding-for-new-developers)
+> section, then come back to read the architecture.
 
-### Option 1: Import via Grafana UI (Recommended)
+---
 
-1. Access your Grafana: https://grafana.dev.cgraaaj.in
-2. Go to **Dashboards** → **Import**
-3. Import these official Istio dashboard IDs from grafana.com:
+## How it works
 
-| Dashboard | ID | Description |
-|-----------|-----|-------------|
-| Istio Control Plane Dashboard | `7645` | Istiod metrics |
-| Istio Mesh Dashboard | `7639` | Overall mesh metrics |
-| Istio Service Dashboard | `7636` | Per-service metrics |
-| Istio Workload Dashboard | `7630` | Per-workload metrics |
-| Istio Performance Dashboard | `11829` | Performance metrics |
+```mermaid
+flowchart LR
+    subgraph Mesh["Istio data plane"]
+        App["App Pod + istio-proxy sidecar"]
+        IGW["istio-ingressgateway"]
+    end
+    subgraph CP["Istio control plane"]
+        Istiod["istiod"]
+    end
+    subgraph PO["Prometheus Operator (kube-prometheus-stack)"]
+        SMon["ServiceMonitor / PodMonitor CRs"]
+        Prom["Prometheus StatefulSet"]
+    end
+    subgraph UI["Visualisation"]
+        Grafana["Grafana<br/>(Istio folder dashboards)"]
+        Kiali["Kiali<br/>(topology / traces)"]
+    end
 
-**Steps:**
+    App -- ":15020 /stats/prometheus" --> SMon
+    IGW -- ":15020 /stats/prometheus" --> SMon
+    Istiod -- ":15014 /metrics" --> SMon
+    SMon -- "config-reload" --> Prom
+    Prom --> Grafana
+    Prom --> Kiali
 ```
-1. Click "+ Import" in Grafana
-2. Enter dashboard ID (e.g., 7639)
-3. Click "Load"
-4. Select your Prometheus data source
-5. Click "Import"
-```
 
-### Option 2: Add Dashboards to kube-prometheus-stack Values
+### Components & their repo paths
 
-Edit your `monitoring/values.yaml` to include Istio dashboards automatically:
+| Layer | What | Source | Deployed by |
+|---|---|---|---|
+| Data plane | Envoy sidecars, Ingress gateway | `argo-registry/qa/manifests/infra/istio-ingressgateway.yaml` | ArgoCD → Helm chart `gateway@1.23.6` |
+| Control plane | `istiod` | `argo-registry/qa/manifests/infra/istiod.yaml` | ArgoCD → Helm chart `istiod@1.23.6` |
+| CRDs | Istio base (Gateway, VirtualService, etc.) | `argo-registry/qa/manifests/infra/istio-base.yaml` | ArgoCD → Helm chart `base@1.23.6` |
+| Scrape config | 3 × `ServiceMonitor` / `PodMonitor` CRs | [`monitoring/istio-servicemonitors/`](../istio-servicemonitors/) | ArgoCD App `istio-servicemonitors` (see [`istio-servicemonitors.yaml`](../../argo-registry/qa/manifests/infra/istio-servicemonitors.yaml)) |
+| Prometheus + Grafana | TSDB + UI | `argo-registry/qa/manifests/infra/prometheus.yaml` | ArgoCD → Helm chart `kube-prometheus-stack@75.15.2` |
+| Istio dashboards | Grafana JSON | **this directory** | see [Deployment options](#deployment-options) |
+| Mesh topology UI | Kiali | `argo-registry/qa/manifests/infra/kiali.yaml` | ArgoCD → Helm chart `kiali-server@1.89.0` |
+
+### Metric discovery flow (end-to-end)
+
+1. **Envoy** exposes Prometheus metrics on port `15020` (data-plane pods) and `15014`
+   (control plane). These endpoints publish `istio_requests_total`,
+   `istio_request_duration_milliseconds`, `pilot_xds_pushes`, and ~100 others.
+2. The three files in [`monitoring/istio-servicemonitors/`](../istio-servicemonitors/) —
+   `servicemonitor-istiod.yaml`, `servicemonitor-envoy.yaml` (a `PodMonitor`), and
+   `servicemonitor-ingress.yaml` — each carry the label
+   ```yaml
+   labels:
+     release: prometheus
+   ```
+   which is the **selector the `kube-prometheus-stack` Prometheus CR uses**
+   (`spec.serviceMonitorSelector.matchLabels.release=prometheus`).
+3. The Prometheus Operator watches for CRs with that label and **hot-reloads the
+   scrape config** — no Prometheus restart needed.
+4. Scraped series land in Prometheus and are queryable from Grafana and Kiali.
+5. **Grafana dashboards** in this directory then render those series.
+
+---
+
+## Deployment options
+
+There are three ways to get the dashboards into Grafana. Pick exactly one.
+
+### Option A — Grafana UI import (current default, simplest)
+
+1. Open https://grafana.dev.cgraaaj.in (Authentik SSO).
+2. **Dashboards → New → Import**.
+3. Enter one of these IDs and click **Load**:
+
+   | Dashboard | Grafana.com ID | Best for |
+   |---|---|---|
+   | Istio Mesh | `7639` | Global mesh health (RPS / success rate / 5xx) |
+   | Istio Service | `7636` | Per-service RED metrics |
+   | Istio Workload | `7630` | Per-workload (Deployment) metrics |
+   | Istio Control Plane | `7645` | `istiod` push / config-sync health |
+   | Istio Performance | `11829` | Latency percentiles, connection pools, circuit breakers |
+
+4. Select the **Prometheus** data source and click **Import**.
+
+This is the quickest path but the dashboards are **not in Git** — re-importing is a manual
+step if the Grafana PVC is ever recreated.
+
+### Option B — Sidecar-injected ConfigMaps (GitOps-native, recommended)
+
+The `kube-prometheus-stack` Helm chart runs a Grafana **dashboard sidecar** that auto-discovers
+`ConfigMap`s labelled `grafana_dashboard: "1"` across the cluster. To adopt this pattern:
+
+1. Drop JSON files into this directory (`monitoring/istio-dashboards/*.json`).
+2. Create `ConfigMap`s wrapping them (one per dashboard) with the sidecar label:
+   ```yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: istio-mesh-dashboard
+     namespace: monitoring
+     labels:
+       grafana_dashboard: "1"
+   data:
+     istio-mesh.json: |
+       <contents of istio-mesh-dashboard.json>
+   ```
+3. Commit them under `monitoring/istio-dashboards/` and the existing `bootstrap-qa`
+   app-of-apps will pick them up automatically once a corresponding ArgoCD Application
+   for `monitoring/istio-dashboards/` is added (**not yet wired — see
+   [Pending work](#pending-work)**).
+
+### Option C — Helm values (embedded in prometheus release)
+
+Add the block below under `grafana:` in
+[`argo-registry/qa/manifests/infra/prometheus.yaml`](../../argo-registry/qa/manifests/infra/prometheus.yaml):
 
 ```yaml
 grafana:
-  enabled: true
-  fullnameOverride: grafana
-  # ... existing config ...
-  
   dashboardProviders:
     dashboardproviders.yaml:
       apiVersion: 1
       providers:
-      - name: 'default'
-        orgId: 1
-        folder: ''
-        type: file
-        disableDeletion: false
-        editable: true
-        options:
-          path: /var/lib/grafana/dashboards/default
-      - name: 'istio'
-        orgId: 1
-        folder: 'Istio'
-        type: file
-        disableDeletion: false
-        editable: true
-        options:
-          path: /var/lib/grafana/dashboards/istio
-  
+        - name: istio
+          orgId: 1
+          folder: Istio
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/istio
   dashboards:
     istio:
-      istio-mesh:
-        gnetId: 7639
-        revision: 202
-        datasource: Prometheus
-      istio-service:
-        gnetId: 7636
-        revision: 202
-        datasource: Prometheus
-      istio-workload:
-        gnetId: 7630
-        revision: 202
-        datasource: Prometheus
-      istio-control-plane:
-        gnetId: 7645
-        revision: 202
-        datasource: Prometheus
-      istio-performance:
-        gnetId: 11829
-        revision: 202
-        datasource: Prometheus
+      istio-mesh:          { gnetId: 7639,  revision: 202, datasource: Prometheus }
+      istio-service:       { gnetId: 7636,  revision: 202, datasource: Prometheus }
+      istio-workload:      { gnetId: 7630,  revision: 202, datasource: Prometheus }
+      istio-control-plane: { gnetId: 7645,  revision: 202, datasource: Prometheus }
+      istio-performance:   { gnetId: 11829, revision: 202, datasource: Prometheus }
 ```
 
-Then upgrade your kube-prometheus-stack:
-```bash
-helm upgrade prometheus prometheus-community/kube-prometheus-stack \
-  -n monitoring \
-  -f monitoring/values.yaml
+`revision: 202` pins the dashboard to a known-good revision — bump only when intentionally
+upgrading.
+
+---
+
+## TL;DR onboarding for new developers
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│  You need Istio metrics in Grafana. Here is the 60-second version.  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Option 3: Manual JSON Import
+1. Verify the ServiceMonitors exist and are labelled correctly:
 
-Download dashboard JSONs from Grafana.com and import them:
+   ```bash
+   kubectl -n istio-system get servicemonitor,podmonitor
+   # Expected: istiod, istio-ingressgateway (ServiceMonitors), envoy-stats (PodMonitor)
+   ```
 
-```bash
-# Download Istio dashboards
-curl -o istio-mesh.json https://grafana.com/api/dashboards/7639/revisions/202/download
-curl -o istio-service.json https://grafana.com/api/dashboards/7636/revisions/202/download
-curl -o istio-workload.json https://grafana.com/api/dashboards/7630/revisions/202/download
-curl -o istio-control-plane.json https://grafana.com/api/dashboards/7645/revisions/202/download
+2. Verify Prometheus is scraping them:
 
-# Import via Grafana UI: Dashboards → Import → Upload JSON
-```
+   ```bash
+   kubectl -n monitoring port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090
+   # → open http://localhost:9090/targets
+   # Look for UP targets: istiod, istio-ingressgateway, envoy-stats/*
+   ```
 
-## Dashboard Descriptions
+3. Import dashboards via **Option A** above (2 minutes, no cluster changes).
 
-### 1. Istio Mesh Dashboard (ID: 7639)
-- **Shows:** Overall service mesh health
-- **Metrics:**
-  - Global request volume
-  - Global success rate
-  - 4xx/5xx errors
-- **Use for:** High-level mesh overview
+4. Generate traffic through a mesh-injected namespace, e.g.:
 
-### 2. Istio Service Dashboard (ID: 7636)
-- **Shows:** Per-service metrics
-- **Metrics:**
-  - Request rate per service
-  - Success rate per service
-  - Request duration (p50, p90, p99)
-- **Use for:** Debugging specific services
+   ```bash
+   kubectl label namespace mediaradar istio-injection=enabled --overwrite
+   kubectl -n mediaradar rollout restart deploy    # pods come back with sidecars
+   # then issue some HTTP traffic against the app
+   ```
 
-### 3. Istio Workload Dashboard (ID: 7630)
-- **Shows:** Per-workload (deployment/pod) metrics
-- **Metrics:**
-  - Request rate per workload
-  - Response time per workload
-  - Inbound/outbound traffic
-- **Use for:** Workload-level troubleshooting
+5. Open the **Istio Service** dashboard in Grafana → charts should populate within 30 s.
 
-### 4. Istio Control Plane Dashboard (ID: 7645)
-- **Shows:** Istiod health
-- **Metrics:**
-  - Pilot proxy pushes
-  - Configuration sync status
-  - Memory/CPU usage
-- **Use for:** Control plane monitoring
+---
 
-### 5. Istio Performance Dashboard (ID: 11829)
-- **Shows:** Detailed performance metrics
-- **Metrics:**
-  - Latency percentiles
-  - Connection pools
-  - Circuit breaker status
-- **Use for:** Performance optimization
+## Recent changes (2026-04 cleanup)
+
+This section documents what was changed so future devs don't repeat the same debugging.
+
+| Change | Why | File(s) |
+|---|---|---|
+| Fixed broken `istio-servicemonitors` ArgoCD Application — it pointed at `https://github.com/cgraaaj/k3s-projects.git` branch `main`, which does not exist (the real remote is `k3s-infra.git` branch `master`). Added `include: servicemonitor-*.yaml` so the app never accidentally syncs a `README.md`. | Without this fix the ServiceMonitors had to be applied by hand; any drift was invisible. | [`argo-registry/qa/manifests/infra/istio-servicemonitors.yaml`](../../argo-registry/qa/manifests/infra/istio-servicemonitors.yaml) |
+| Added `bootstrap-qa` app-of-apps that recursively syncs every `*.yaml` under `argo-registry/qa/manifests/` (excluding itself and the guestbook tutorial). | Before this, updating a chart version in Git required a follow-up `kubectl apply -f …` on each Application CR — the GitOps loop was open. Now every merged PR on `master` deploys automatically. | [`argo-registry/qa/manifests/bootstrap-qa.yaml`](../../argo-registry/qa/manifests/bootstrap-qa.yaml) |
+| Added `ignoreDifferences` blocks to `istio-base` and `istiod` Applications for `ValidatingWebhookConfiguration.webhooks[].clientConfig.caBundle` and `MutatingWebhookConfiguration.webhooks[].clientConfig.caBundle`. | Istio injects its own CA bundle into the webhooks at runtime, which made ArgoCD permanently show them as `OutOfSync` even though the cluster was healthy. | [`istio-base.yaml`](../../argo-registry/qa/manifests/infra/istio-base.yaml), [`istiod.yaml`](../../argo-registry/qa/manifests/infra/istiod.yaml) |
+| Bumped all three Istio charts `1.23.2 → 1.23.6` (in-minor patch) together with 4 other Tier-1 patches. | Kept behaviour identical (same minor) while picking up CVE/patch fixes. Major Istio upgrades (1.24–1.29) are gated behind the Renovate Dependency Dashboard because Istio does not support skipping more than 2 minors. | commit `96f0e9f` |
+| Renovate rules hardened: Istio/Prometheus/Authentik minors & majors are now behind the Dependency Dashboard approval checkbox (no PR opens until you tick the box). | Prevents accidental `1.23 → 1.29` or `75 → 84` single-step jumps that would break the cluster. | [`renovate.json`](../../renovate.json) |
+| Consolidated Istio root docs (5 files, ~1,612 lines of 192.168.1.x-era notes) into [`docs/istio/README.md`](../../docs/istio/README.md). | Root was cluttered with overlapping, outdated guides. | deleted in commit preceding `96f0e9f` |
+
+### What still uses the old `monitoring/…` path and needs attention
+
+These directories contain real resources in the cluster but are **not yet wired into ArgoCD**:
+
+| Path | Current state | Recommended next step |
+|---|---|---|
+| [`monitoring/istio-dashboards/`](.) (JSON files) | Imported manually via Grafana UI (Option A) | Adopt Option B: convert each dashboard to a labelled `ConfigMap`, add an ArgoCD Application, let `bootstrap-qa` sync it |
+| [`monitoring/alerts/`](../alerts/) | `PrometheusRule` CRs applied by hand | Add an ArgoCD Application pointing at this path |
+| [`monitoring/alertmanager-router-config.yaml`](../alertmanager-router-config.yaml) | Applied manually | Ship via the `kube-prometheus-stack` Helm `alertmanager.config` field |
+| [`monitoring/alert-router/`](../alert-router/) (Python webhook) | Deployed by hand via `build-deploy.sh` | Publish image to internal registry + reference from an ArgoCD Application |
+
+---
 
 ## Verification
 
-After importing, verify dashboards work:
+After any change to the scrape layer:
 
-1. Go to **Dashboards** → **Browse**
-2. Look for "Istio" folder
-3. Open any Istio dashboard
-4. You should see metrics once Istio is deployed and generating traffic
+```bash
+# 1. ServiceMonitors discovered by Prometheus?
+kubectl -n istio-system get servicemonitor,podmonitor -o wide
+
+# 2. Targets UP in Prometheus?
+kubectl -n monitoring port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090
+# → http://localhost:9090/targets  (filter by job: envoy-stats | istiod | istio-ingressgateway)
+
+# 3. Series present?
+curl -sG 'http://localhost:9090/api/v1/query' \
+  --data-urlencode 'query=sum(rate(istio_requests_total[5m]))'
+
+# 4. Dashboards reachable?
+open https://grafana.dev.cgraaaj.in            # should redirect through Authentik SSO
+```
 
 ## Troubleshooting
 
-**No data in dashboards:**
-1. Verify Prometheus is scraping Istio metrics:
-   ```bash
-   kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 9090:9090
-   # Open http://localhost:9090
-   # Go to Status → Targets
-   # Check for istio-system targets
-   ```
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| **Targets DOWN in `/targets`** | ServiceMonitor missing the `release: prometheus` label, so the Prometheus CR's `serviceMonitorSelector` does not match it | Re-apply the ServiceMonitor with the correct label, or check `kubectl -n monitoring get prometheus prometheus-kube-prometheus-prometheus -o yaml \| grep serviceMonitorSelector -A3` |
+| **"No data" in Istio dashboards** | Namespace is not mesh-injected, so no sidecar means no `istio_*` metrics | `kubectl label ns <name> istio-injection=enabled --overwrite` then restart the pods |
+| **Dashboards show old data / freeze** | Prometheus retention is set to `6h` on this cluster (see [`prometheus.yaml`](../../argo-registry/qa/manifests/infra/prometheus.yaml) line `retention: 6h`). Normal. | Increase `retention` in the Helm values if longer history is needed — be mindful of Longhorn PVC size. |
+| **Kiali shows empty graph** | Kiali queries Prometheus; if ServiceMonitors are wrong Kiali is also affected | Fix the ServiceMonitor path first; Kiali will recover. |
+| **Grafana dashboard imports disappear on Grafana pod restart** | You used Option A (UI import) and the Grafana admin dashboards PVC was not persistent, or the dashboard was saved in-memory | Switch to Option B (sidecar `ConfigMap`) for permanent dashboards |
+| **ArgoCD shows `istio-base`/`istiod` as OutOfSync** | Istio CA bundle injection drift | Should be silenced by the `ignoreDifferences` blocks added in 2026-04. If it returns, re-check those blocks are intact. |
 
-2. Verify ServiceMonitors are deployed:
-   ```bash
-   kubectl get servicemonitor -n istio-system
-   ```
+## Pending work
 
-3. Check if Istio pods are running:
-   ```bash
-   kubectl get pods -n istio-system
-   ```
+- [ ] Convert the 5 Grafana dashboards in this directory to labelled `ConfigMap`s and wire an ArgoCD Application for `monitoring/istio-dashboards/` — fully GitOps-managed.
+- [ ] Add `PrometheusRule` for Istio: high-cardinality labels, 5xx rate > 5 % for 5 m, pilot push errors > 0.
+- [ ] Upgrade Istio along the supported path `1.23 → 1.24 → 1.25 → 1.26 → 1.27 → 1.28 → 1.29` via 6 sequential Renovate PRs (gated behind Dependency Dashboard).
+- [ ] Export Kiali traces to Tempo / Jaeger (currently `sampling: 1.0` is set in `istiod.yaml` but there is no trace backend configured).
 
-**Wrong data source:**
-- Edit dashboard settings → Variables
-- Update data source to match your Prometheus instance name
+## References
 
-## Next Steps
-
-1. Import dashboards to Grafana
-2. Deploy Istio (if not already)
-3. Deploy applications with Istio sidecars
-4. Generate traffic to see metrics
-5. Explore dashboards in Grafana
-
-
-
-
+- Official Istio observability guide: https://istio.io/latest/docs/tasks/observability/
+- Prometheus Operator ServiceMonitor CRD: https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.ServiceMonitor
+- Grafana sidecar dashboard discovery: https://github.com/kiwigrid/k8s-sidecar
+- Local docs: [`docs/istio/README.md`](../../docs/istio/README.md), [`monitoring/istio-servicemonitors/README.md`](../istio-servicemonitors/README.md), [`monitoring/README.md`](../README.md)

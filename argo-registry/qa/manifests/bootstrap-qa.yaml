@@ -1,34 +1,37 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: istio-servicemonitors
+  name: bootstrap-qa
   namespace: argocd-qa
   finalizers:
     - resources-finalizer.argocd.argoproj.io
   annotations:
-    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-wave: "-10"
 spec:
   project: infrastructure
   source:
     repoURL: https://github.com/cgraaaj/k3s-infra.git
     targetRevision: master
-    path: monitoring/istio-servicemonitors
+    path: argo-registry/qa/manifests
     directory:
-      recurse: false
-      include: 'servicemonitor-*.yaml'
+      recurse: true
+      include: '*.yaml'
+      exclude: '{bootstrap-qa.yaml,apps/test.yaml}'
   destination:
     server: https://kubernetes.default.svc
-    namespace: istio-system
+    namespace: argocd-qa
   syncPolicy:
-    syncOptions:
-      - CreateNamespace=false
-      - ServerSideApply=true
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
     retry:
-      limit: 3
+      limit: 5
       backoff:
-        duration: 5s
+        duration: 10s
         factor: 2
-        maxDuration: 3m
+        maxDuration: 5m

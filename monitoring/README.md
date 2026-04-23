@@ -15,8 +15,8 @@ and the [`loki` ArgoCD Application](../argo-registry/qa/manifests/infra/loki.yam
 | [`alerts/`](alerts/)                                | `PrometheusRule` manifests                                     |
 | [`alert-router/`](alert-router/)                    | Custom alert webhook router (Python + Dockerfile)              |
 | [`alertmanager-router-config.yaml`](alertmanager-router-config.yaml) | Alertmanager routing tree                       |
-| [`istio-dashboards/`](istio-dashboards/)            | Grafana dashboards for Istio                                   |
-| [`istio-servicemonitors/`](istio-servicemonitors/)  | `ServiceMonitor` / `PodMonitor` CRs for Istio scraping         |
+| [`istio-dashboards/`](istio-dashboards/)            | Grafana dashboards for Istio — see [README](istio-dashboards/README.md) for the full architecture + onboarding flow |
+| [`istio-servicemonitors/`](istio-servicemonitors/)  | `ServiceMonitor` / `PodMonitor` CRs for Istio scraping (label `release: prometheus`) |
 | [`loki-stack/`](loki-stack/)                        | Loki Helm values + PVC                                         |
 
 ## Access
