@@ -101,11 +101,6 @@ spec:
       name: istio-ingressgateway
       jsonPointers:
         - /spec/replicas
-      jqPathExpressions:
-        - .spec.progressDeadlineSeconds
-        - .spec.revisionHistoryLimit
-        - .spec.strategy.type
-        - .spec.template.spec.containers[]?.resources.limits.cpu
     - group: admissionregistration.k8s.io
       kind: ValidatingWebhookConfiguration
       jqPathExpressions:

@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd-qa
+  annotations:
+    reloader.stakater.com/match: "true"
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # -----------------------------------------------------------------------
+  # Cluster-wide ignoreDifferences rules.
+  #
+  # Why these exist
+  # ---------------
+  # When ArgoCD adopts resources that were installed out-of-band (manual
+  # `kubectl apply`, `helm install`, or an operator) the live objects
+  # contain every default that the Kubernetes API server injects, while
+  # the rendered Helm/Kustomize manifests in Git only contain what the
+  # author typed. ArgoCD then marks these resources as OutOfSync forever.
+  #
+  # Rather than adding a 20-line `ignoreDifferences` block to every single
+  # Application manifest, we ignore the known-benign defaults here, once,
+  # for the whole cluster. Real, actionable drift still surfaces.
+  # -----------------------------------------------------------------------
+  resource.customizations.ignoreDifferences.apps_Deployment: |
+    jqPathExpressions:
+      - .spec.progressDeadlineSeconds
+      - .spec.revisionHistoryLimit
+      - .spec.strategy.type
+      - .spec.template.metadata.creationTimestamp
+      - .spec.template.spec.dnsPolicy
+      - .spec.template.spec.restartPolicy
+      - .spec.template.spec.schedulerName
+      - .spec.template.spec.securityContext
+      - .spec.template.spec.terminationGracePeriodSeconds
+      - .spec.template.spec.containers[]?.terminationMessagePath
+      - .spec.template.spec.containers[]?.terminationMessagePolicy
+      - .spec.template.spec.containers[]?.readinessProbe.failureThreshold
+      - .spec.template.spec.containers[]?.readinessProbe.successThreshold
+      - .spec.template.spec.containers[]?.readinessProbe.httpGet.scheme
+      - .spec.template.spec.containers[]?.livenessProbe.failureThreshold
+      - .spec.template.spec.containers[]?.livenessProbe.successThreshold
+      - .spec.template.spec.containers[]?.livenessProbe.httpGet.scheme
+      - .spec.template.spec.containers[]?.startupProbe.failureThreshold
+      - .spec.template.spec.containers[]?.startupProbe.successThreshold
+      - .spec.template.spec.containers[]?.env[]?.valueFrom.resourceFieldRef.divisor
+      - .spec.template.spec.volumes[]?.projected.defaultMode
+      - .spec.template.spec.volumes[]?.secret.defaultMode
+      - .spec.template.spec.volumes[]?.configMap.defaultMode
+
+  resource.customizations.ignoreDifferences.apps_StatefulSet: |
+    jqPathExpressions:
+      - .spec.revisionHistoryLimit
+      - .spec.podManagementPolicy
+      - .spec.template.metadata.creationTimestamp
+      - .spec.template.spec.dnsPolicy
+      - .spec.template.spec.restartPolicy
+      - .spec.template.spec.schedulerName
+      - .spec.template.spec.terminationGracePeriodSeconds
+      - .spec.template.spec.containers[]?.terminationMessagePath
+      - .spec.template.spec.containers[]?.terminationMessagePolicy
+
+  resource.customizations.ignoreDifferences.apps_DaemonSet: |
+    jqPathExpressions:
+      - .spec.revisionHistoryLimit
+      - .spec.template.metadata.creationTimestamp
+      - .spec.template.spec.dnsPolicy
+      - .spec.template.spec.restartPolicy
+      - .spec.template.spec.schedulerName
+      - .spec.template.spec.terminationGracePeriodSeconds
+      - .spec.template.spec.containers[]?.terminationMessagePath
+      - .spec.template.spec.containers[]?.terminationMessagePolicy
+
+  # Normalise CPU quantity drift ("1000m" vs "1") for every resource that
+  # exposes a PodSpec. ArgoCD's built-in known-type normalisers handle
+  # core types when this key lists them explicitly.
+  resource.compareoptions: |
+    ignoreAggregatedRoles: true
+    ignoreResourceStatusField: all

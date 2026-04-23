@@ -7,6 +7,7 @@ Declarative source for the two ArgoCD installs that serve this cluster:
 | [qa/](qa/)               | Kustomize + IngressRoute for **`argocd-qa`** (primary active install; UI at `argocd.qa.cgraaaj.in`). |
 | [prod/](prod/)           | Raw HA install + IngressRoute for the future prod ArgoCD.            |
 | [argocd-cmd-params-cm.yaml](argocd-cmd-params-cm.yaml) | ConfigMap patch enabling `server.insecure: "true"` so Traefik can terminate TLS upstream. |
+| [argocd-cm.yaml](argocd-cm.yaml) | ConfigMap patch with cluster-wide `resource.customizations.ignoreDifferences.*` so Kubernetes API-server defaults on Deployment / StatefulSet / DaemonSet resources (e.g. `progressDeadlineSeconds: 600`, `defaultMode: 420`, `terminationGracePeriodSeconds: 30`) don't show up as permanent drift in ArgoCD. Apply with `kubectl apply -f argocd-cm.yaml` and restart `argocd-application-controller-0`. |
 
 ## Operational notes
 

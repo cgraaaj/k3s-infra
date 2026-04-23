@@ -72,11 +72,6 @@ spec:
       name: istiod
       jsonPointers:
         - /spec/replicas
-      jqPathExpressions:
-        - .spec.progressDeadlineSeconds
-        - .spec.revisionHistoryLimit
-        - .spec.strategy.type
-        - .spec.template.spec.containers[]?.resources.limits.cpu
 
 
 
