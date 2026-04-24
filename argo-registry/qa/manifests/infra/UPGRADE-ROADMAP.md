@@ -24,7 +24,7 @@ merged so the next engineer knows what's in-flight.
 | **cert-manager**              | `v1.18.6` ⬆ from `v1.17.4` | `v1.20.2` | T3-step-1 | `v1.19.5` → `v1.20.2` |
 | **istio-base / istiod / gateway** | `1.25.5` ⬆ from `1.23.6` | `1.29.2` | T3-step-1 (N-2 skip) | `1.27.x` → `1.29.x` |
 | **longhorn**                  | `1.9.2` ⬆ from `1.8.2`  | `1.11.1` | T3-step-1 | `1.10.x` → `1.11.x` |
-| **authentik**                 | git: `2025.2.4` / runtime: `2025.12.4` (rollback failed — see runbook) | `2026.2.2` | — | Roll-forward to `2025.12.4` in git + override PG image to bitnami `15.x`, OR do PG15→17 migration. Until then: `selfHeal: false` on the Application CR. |
+| **authentik**                 | `2025.12.4` ⬆ from `2025.2.4` (PG15→17 + local-path→longhorn-retain done 2026-04-24) | `2026.2.2` | T3-step-1 | `2025.12.4` → `2026.2.2` (year-release, see runbook) |
 | **traefik**                   | `36.3.0` ⬆ from `34.4.1` | `39.0.8` | T3-step-1 | `37.x` → `38.x` → `39.x` |
 | **kube-prometheus-stack**     | `75.15.2`     | `84.0.0`       | — | T3 — defer, CRD migration needed |
 | **kiali-server**              | `1.89.0`      | `2.25.0`       | — | T3 — v1→v2 full rewrite, defer |
@@ -89,68 +89,71 @@ backend, executor options, metrics). Recommended:
 2. Bump the chart `0.68.1 → 0.80.x` first (still Runner 18.3.x), verify jobs still execute.
 3. Then step to `0.88.1`.
 
-### authentik: PostgreSQL 15 → 17 migration **REQUIRED** before any chart bump past `2025.2.4`
+### authentik: PG15 → PG17 + local-path → longhorn-retain — **COMPLETED 2026-04-24** (Path B)
 
-**Trap discovered during `2025.12.4` attempt (2026-04-23):** starting in authentik chart
-`2025.10.x`, the project dropped the bitnami/postgresql subchart (which ships
-`bitnami/postgresql:15.x`) and switched to the upstream `docker.io/library/postgres:17`
-image. The helm upgrade silently changes the postgres image in the StatefulSet, but the
-existing PV is a PG15 data directory, so the new pod crash-loops with:
+**Outcome (2026-04-24):** chart rolled forward `2025.2.4 → 2025.12.4`, postgres data
+migrated from `bitnami/postgresql:15.8` on `local-path` (single-node, reclaim=Delete) to
+`docker.io/library/postgres:17.7-bookworm` on `longhorn-retain` (replicated,
+reclaim=Retain). All 207 public tables, 733 indexes, 327 FKs, 9 triggers restored
+cleanly via `pg_dumpall | psql`; row counts (users, tokens, flows, sessions, providers,
+applications) verified equal to source. Auth-gated routes (mediaradar, grafana, admin
+UI) all returned the expected `302`/`200` codes immediately after restore.
+
+Reference commits in this repo:
+- chart bump + storageclass override (Phase 3)
+- re-enable `syncPolicy.automated` (Phase 7)
+- this roadmap update (Phase 8)
+
+**Side-effect (intentional):** chart `2025.12.4` dropped the `redis` subchart entirely.
+authentik now uses PostgreSQL for sessions/channels/cache (see
+`django_channels_postgres` migration and `using PostgreSQL session backend` server log).
+The auto-prune cleanly removed the leftover redis pod / STS / PVC / Service / CMs
+during the Phase 7 sync.
+
+#### Lessons learned (apply to future major chart bumps)
+
+1. **Chart key restructuring**: `2025.10.x` flipped the postgres section to bitnami
+   subchart layout. The correct override keys are now
+   `postgresql.primary.persistence.{enabled,storageClass,size}`, NOT
+   `postgresql.storageClass` / `postgresql.persistence.storageClass`. Always
+   `helm show values <chart> --version <new>` before authoring `helm.parameters`
+   inline overrides.
+2. **`primary.persistence.enabled` defaults to false** in chart 2025.12.4 (the bitnami
+   subchart's default is true, but the goauthentik chart comments out its primary
+   persistence block). Without an explicit override the rendered STS would be
+   emptyDir-backed.
+3. **Changing `volumeClaimTemplates.spec.storageClassName` is forbidden** on an existing
+   StatefulSet (immutable field). Workflow has to be: scale STS to 0 → `kubectl delete sts`
+   → `argocd app sync` (with `Replace=true` if the chart also uses `$retainKeys` in
+   Deployment.spec.strategy, which authentik 2025.12.4 does).
+4. **Upstream `library/postgres:17` image vs bitnami entrypoint env vars**: the upstream
+   image only honours `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`. It IGNORES
+   the bitnami-flavoured `POSTGRES_POSTGRES_PASSWORD_FILE` mount, so the `postgres`
+   superuser ends up with NO password (initdb default). The chart-renamed `authentik`
+   role IS the superuser, so use it for `psql` operations (PG15 dumps restore cleanly
+   under it as long as you trim the `\connect postgres` tail).
+5. **`pg_dumpall --clean --if-exists`** would `DROP ROLE authentik` and overwrite its
+   password from the dump's old hash — bad, because the K8s Secret-tracked password is
+   what the new server pod uses. Restore with sed-extracted lines `\connect authentik`
+   .. `\connect postgres` instead, or use `pg_dump -d authentik` from the start. Don't
+   feed the entire `pg_dumpall` output to `psql` against the new cluster.
+6. **Auto-prune of removed subcharts is correct, but verify the app still works first.**
+   Don't re-enable `automated.prune: true` until you have manually confirmed the
+   service is healthy on the new chart.
+
+#### Repeatable runbook (for future chart-driven storage-class migrations)
 
 ```
-FATAL: database files are incompatible with server
-DETAIL: The data directory was initialized by PostgreSQL version 15,
-         which is not compatible with this version 17.7
+# 0. preflight: helm template the new chart with overrides, confirm STS name + PVC name + image
+# 1. pg_dumpall warm dump (DB still serving) -> .backups/  (gitignored)
+# 2. scale server+worker to 0  -> auth outage starts; take final consistent dump
+# 3. git: bump targetRevision + add helm.parameters override + KEEP automated block OFF
+# 4. scale STS to 0 → delete PVC → delete STS → argocd sync (RespectIgnoreDifferences,Replace,SSA)
+# 5. drop+recreate empty DB → stream the authentik-only dump section into psql
+# 6. scale server+worker back to 1 → verify outpost endpoints + smoke test 302/200
+# 7. git: re-enable syncPolicy.automated → bootstrap-qa picks it up → app reconciles Synced/Healthy
+# 8. update this roadmap, verify no stray PVs, final commit
 ```
-
-To move past `2025.2.4` you must migrate the data first:
-
-1. **Snapshot** the Longhorn PV backing `data-authentik-postgresql-0` (RTO backup).
-2. Scale authentik-server and authentik-worker to 0 to stop writes.
-3. `kubectl -n authentik exec authentik-postgresql-0 -- pg_dumpall -U authentik > authentik-pg15.sql`
-4. Scale the StatefulSet down, delete the PVC, let Helm re-create with PG17.
-5. `kubectl -n authentik cp authentik-pg15.sql authentik-postgresql-0:/tmp/ && kubectl -n authentik exec -it authentik-postgresql-0 -- psql -U authentik -f /tmp/authentik-pg15.sql`
-6. Scale server + worker back up, verify admin UI.
-7. Then bump chart `2025.2.4 → 2025.12.4 → 2026.2.2`.
-
-**Why automated rollback on this run was non-trivial:** the authentik Application has
-`syncPolicy.automated.selfHeal: true`, which kept pushing the StatefulSet back to the
-new (broken) 2025.12.4 template. We temporarily disabled `selfHeal` on the authentik
-Application CR so the rollback could stick.
-
-**Critical follow-up finding (post-mortem 2026-04-23 evening):** the chart rollback to
-`2025.2.4` cannot actually take effect, because the brief `2025.12.4` run **already
-migrated the application schema** (notably renamed
-`authentik_core_authenticatedsession.session_key` → `session_id`). The 2025.2.4 server
-container therefore crash-loops with `column ... session_key does not exist` against
-the migrated DB. Two ReplicaSets coexist in the cluster:
-
-| RS | Image | State |
-|----|-------|-------|
-| `authentik-server-7bd5ccc8bc` | `goauthentik/server:2025.2.4` (git desired) | 0/1, fails readiness with the schema error |
-| `authentik-server-84867d7d87` | `goauthentik/server:2025.12.4` (orphan from upgrade) | 1/1 — the only pod actually serving outpost / forward-auth |
-
-If `selfHeal` (or `prune`) is ever turned back on while git is still at `2025.2.4`,
-ArgoCD will GC the only working pod and **all auth-gated apps** (mediaradar, grafana,
-optionscope, argocd, traefik dashboard, etc.) will go dark cluster-wide. `prune` and
-`selfHeal` are therefore both intentionally pinned to `false` in
-`argo-registry/qa/manifests/infra/authentik.yaml` until one of the two paths below is
-executed.
-
-**Recovery options (pick one):**
-
-A. **Roll FORWARD in git to `2025.12.4`** (matches what's actually running) and *override
-   the postgresql image* in `k3s-infra/authentik/values.yaml` so the chart keeps using
-   `bitnami/postgresql:15.8.0-debian-12-r18` instead of `library/postgres:17`. This is the
-   lowest-risk path because no DB migration runs. Then re-enable `selfHeal: true` and
-   `prune: true` on the Application.
-
-B. **Execute the PG15 → PG17 migration** documented above (snapshot, `pg_dumpall`, scale
-   down, recreate PVC, `psql -f`, scale up). After PG17 is live, the rolled-forward
-   chart 2025.12.4 (with stock `library/postgres:17`) will reconcile cleanly.
-
-Until A or B is done, do NOT run `kubectl -n argocd-qa app sync authentik` with
-`Prune=true` or toggle `automated.prune/selfHeal: true`.
 
 ### cert-manager v1.17 → v1.18: needs `Replace=true` sync option
 
@@ -177,14 +180,21 @@ pod restarts. If this happens, options in order of preference:
 3. Directly patch the child Application CR's `targetRevision` and (only as a last resort)
    toggle `syncPolicy.automated.selfHeal: false` on it, to break the selfHeal loop.
 
-### authentik 2025.x → 2026.2 (year release — breaking)
+### authentik 2025.12.4 → 2026.2.x (year release — breaking)
 Authentik's yearly release boundary bundles database migrations, API deprecations,
-and UI changes. **Do the PG15 → 17 migration first (see above), then:**
+and UI changes. PG15 → 17 + storage migration is already done (see above). Sequence:
 
-1. Snapshot the `authentik-postgresql-*` PV via Longhorn.
+1. Take a Longhorn snapshot of the `data-authentik-postgresql-0` PVC (now on
+   `longhorn-retain`, which supports snapshots — that's why we did the storage migration).
 2. Review [authentik 2026.2 release notes](https://docs.goauthentik.io/docs/releases).
-3. Bump chart.
-4. Verify all providers/flows/stages still load in the admin UI.
+3. Open Renovate dashboard issue, tick the authentik 2026.x checkbox, review the
+   rendered diff (chart-side migration scripts, removed CRDs, etc.).
+4. Merge → bootstrap-qa fans out → ArgoCD applies.
+5. Verify all providers/flows/stages still load in the admin UI; smoke-test
+   mediaradar / grafana / argocd UI HTTP 302 round-trip.
+6. If the bump fails, scale workers to 0, restore the snapshot via Longhorn, scale
+   workers back up. Same approach as Path B but using Longhorn snapshots instead of
+   pg_dumpall (now possible because we're off local-path).
 
 ## Why these aren't all auto-merged
 

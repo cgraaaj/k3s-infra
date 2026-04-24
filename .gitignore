@@ -28,3 +28,5 @@ Thumbs.db
 *.orig
 *.tmp
 *~
+# Local migration / DB dump scratch dir (PG dumps, captured K8s objects, never commit)
+.backups/
