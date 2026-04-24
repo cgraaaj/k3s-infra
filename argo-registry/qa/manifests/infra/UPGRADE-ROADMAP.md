@@ -20,42 +20,64 @@ merged so the next engineer knows what's in-flight.
 | kubernetes-replicator         | `2.12.3`      | `2.12.3`       | — | none |
 | loki-stack                    | `2.10.3`      | `2.10.3`       | — | none |
 | minio                         | `5.4.0`       | `5.4.0`        | — | none |
-| **vault** (hashicorpvault)    | `0.32.0` ⬆ from `0.30.1` | `0.32.0` | T2 | — |
-| **cert-manager**              | `v1.19.5` ⬆ from `v1.18.6` (2026-04-24) | `v1.20.2` | T3-step-2 | `v1.20.2` |
-| **istio-base / istiod / gateway** | `1.27.9` ⬆ from `1.25.5` (2026-04-24, N-2 skip 1.26) | `1.29.2` | T3-step-2 (N-2 skip) | `1.29.x` |
-| **longhorn**                  | `1.10.2` ⬆ from `1.9.2` (2026-04-24) | `1.11.1` | T3-step-2 | `1.11.1` |
+| **vault** (hashicorpvault)    | `0.32.0` ⬆ from `0.30.1` | `0.32.0` | T2 | — (StatefulSet image rolls when pod is recycled; auto-unseal CronJob now hardened, see below) |
+| **cert-manager**              | `v1.20.2` ⬆ from `v1.19.5` (2026-04-24, CRDs reconciled v1.12.10 → v1.20.2) | `v1.20.2` | T3-step-3 | — (caught up to latest) |
+| **istio-base / istiod / gateway** | `1.27.9` ⬆ from `1.25.5` (2026-04-24, N-2 skip 1.26) | `1.29.2` | T3-step-2 (N-2 skip) | `1.29.x` — gated on sidecar convergence |
+| **longhorn**                  | `1.11.1` ⬆ from `1.10.2` (2026-04-24, snapshots `pre-111-20260424-1244-*` taken) | `1.11.1` | T3-step-3 | — (caught up to latest) |
 | **authentik**                 | `2025.12.4` ⬆ from `2025.2.4` (PG15→17 + local-path→longhorn-retain done 2026-04-24) | `2026.2.2` | T3-step-1 | `2025.12.4` → `2026.2.2` (year-release, see runbook) |
-| **traefik**                   | `37.4.0` ⬆ from `36.3.0` (2026-04-24, runtime v3.4.3 → v3.6.2) | `39.0.8` | T3-step-2 | `38.x` → `39.x` |
+| **traefik**                   | `38.0.2` ⬆ from `37.4.0` (2026-04-24, runtime v3.6.2 → v3.6.6) | `39.0.8` | T3-step-3 | `38.x` → `39.x` |
 | **kube-prometheus-stack**     | `75.15.2`     | `84.0.0`       | — | T3 — defer, CRD migration needed |
 | **kiali-server**              | `1.89.0`      | `2.25.0`       | — | T3 — v1→v2 full rewrite, defer |
 | **gitlab-runner**             | `0.68.1`      | `0.88.1`       | — | T3 — GitLab Runner 17→18, defer |
 
 ## Runbooks for remaining T3 migrations
 
-### Istio 1.25 → 1.27 → 1.29 (N-2 rule) — **step-2 done 2026-04-24**
+### Istio 1.25 → 1.27 → 1.29 (N-2 rule) — **step-2 done; 1.29 deferred (sidecar gate)**
 Istio supports skipping at most 2 minor versions. Sequence:
 
 1. ~~Merge initial PR and confirm 1.25.5 is Healthy~~ ✅ done.
 2. ~~Wait ≥ 1 week on 1.25 in dev before the next step~~ — soak shortened to <1d in dev.
 3. ~~Bump all three (`base`, `istiod`, `gateway`) to `1.27.9` in one commit. Gateway last.~~ ✅ done 2026-04-24, all three Synced/Healthy, CRDs at 1.27.9, smoke-tests `auth.dev`/`mediaradar`/`grafana.dev`/`kiali.dev` returned HTTP 302.
-4. **Soak ≥ 1 week before next step.** Existing sidecars stay at proxyv2:1.25.5 until the workload is restarted (sidecar lazy-injection); confirm via `istioctl proxy-status` per app over the week, then proactively restart deploys to converge them to 1.27.9 sidecars before stepping to 1.29.
-5. Bump to `1.29.2`. Same lockstep + same wait.
+4. **Sidecar convergence (gating step for 1.29)** — STARTED 2026-04-24. Discovered that
+   existing app sidecars were at `proxyv2:1.23.2` (already N-4 from istiod 1.27.9 — outside
+   the supported skew, only working because xDS is forward-tolerant). Initiated
+   `kubectl rollout restart deployment` on all 5 injected workloads
+   (`mediaradar/mediaradar-mr-k8s`, `mediaradar-svc/mediaradar-svc-k8s`,
+   `optionscope/optionscope-optionscope-k8s`, `stockx/stockx-svc-stockx-svc-k8s`,
+   `tickerflow/tickerflow-k8s`). New pods inject sidecars at `proxyv2:1.27.9`; old pods
+   continue serving until new are Ready. The `mediaradar-mr-k8s` Deployment had
+   `replicas:1` with `maxUnavailable:25%` (rounded down to 0) so the rollout deadlocked
+   until the old pod was deleted manually — note for future restarts. Convergence is
+   blocked by slow `vault-agent-init` containers waiting on Vault (which was sealed; see
+   below). Until ALL sidecars are at 1.27.9, do **not** step istiod to 1.29 (would put
+   istiod at N-6 from data-plane = mesh-breaking).
+5. Bump to `1.29.2` once `kubectl get pods -A -o jsonpath='...istio-proxy...'` shows zero
+   1.23.2 sidecars. Same lockstep (base/istiod/gateway, gateway last) + same soak.
 
 **Pre-flight before each step**: `istioctl x precheck` from a pod with `istioctl` installed.
 
-### cert-manager 1.18 → 1.19 → 1.20 — **step-2 done 2026-04-24**
+### cert-manager 1.18 → 1.19 → 1.20 — **step-3 done 2026-04-24, caught up**
 cert-manager supports N+1 minor bumps directly, but each bump may add/deprecate CRD fields.
 
 1. ~~Confirm 1.18.6 Healthy.~~ ✅ done.
-2. **Fix the pre-existing CRD drift first** (cluster still runs v1.12.10 CRDs from a manual
-   `kubectl apply` long ago): flip `helm.skipCrds: false` in `cert-manager.yaml`, sync,
-   watch `Certificate`/`Issuer` reconcile. **Still pending — gating step-3.**
-3. ~~Bump chart to `v1.19.5`~~ ✅ done 2026-04-24 (required `Replace=true` once for the
-   `$retainKeys` SSA issue + delete the immutable `startupapicheck` Job; live deployments
-   running `cert-manager-controller:v1.19.5` and all 9 visible Certificates remain
-   `Ready=True`). Wait for stability, then `v1.20.2`.
+2. ~~Fix the pre-existing CRD drift~~ ✅ done 2026-04-24. Important learning: **`helm.skipCrds`
+   is a no-op for cert-manager ≥1.18** because the chart no longer ships CRDs in the legacy
+   `crds/` folder; they are gated behind a value `crds.enabled` (default `false`). The fix
+   was to set both `crds.enabled: true` and `crds.keep: true` via inline `helm.parameters`
+   in `cert-manager.yaml`. CRDs jumped from v1.12.10 → v1.20.2, all six now
+   `app.kubernetes.io/managed-by: Helm` with `helm.sh/resource-policy: keep` (so an
+   accidental uninstall never cascade-deletes Issuer/Certificate CRs). Pre-existing 17
+   Certificates and 2 ClusterIssuers stayed `Ready=True` throughout the swap.
+3. ~~Bump chart to `v1.19.5`~~ ✅ done 2026-04-24-step2 (required `Replace=true` once for the
+   `$retainKeys` SSA issue + delete the immutable `startupapicheck` Job).
+4. ~~Bump chart to `v1.20.2`~~ ✅ done 2026-04-24-step3, in the same sync as the CRD flip.
+   Same `Replace=true` syncOptions used (the chart still uses `$retainKeys` in
+   `Deployment.spec.strategy`). Cleanup: deleted orphaned RoleBinding
+   `cert-manager-cert-manager-tokenrequest` left behind from chart 1.18.6 (renamed to
+   `cert-manager-tokenrequest` in 1.19+) and post-install `startupapicheck` hook resources.
+   App is `Synced/Healthy`.
 
-### longhorn 1.9 → 1.10 → 1.11 — **step-2 done 2026-04-24**
+### longhorn 1.9 → 1.10 → 1.11 — **step-3 done 2026-04-24, caught up**
 **Storage — never skip minors**. Each bump requires:
 
 1. Take a [Longhorn backup snapshot](https://longhorn.io/docs/1.11.1/snapshots-and-backups/)
@@ -71,20 +93,37 @@ cert-manager supports N+1 minor bumps directly, but each bump may add/deprecate 
    `production.cloudflare.docker.com` and still pulling at the time of this commit).
    Existing volumes stay on their current engine until the next detach/attach cycle.
 5. Test a volume detach/attach cycle before proceeding to 1.11.x.
+6. ~~Bump 1.10.2 → 1.11.1.~~ ✅ done 2026-04-24-step3. Pre-bump snapshots
+   `pre-111-20260424-1244-*` taken on all 7 attached volumes. Chart applied,
+   `longhorn-post-upgrade` Helm hook completed. Post-upgrade verification:
+   - all 7 stateful volumes `attached + healthy`
+   - Vault stayed unsealed throughout the rolling restart of `longhorn-manager`
+   - Authentik PG, mediaradar, grafana, kiali, auth.dev all returned HTTP 302/200
+   - longhorn-manager DaemonSet now at `v1.11.1` (6/7 nodes; one RPi engine-image still
+     pulling slowly — same node-level DNS issue as the 1.10 bump)
+   - existing per-PV engine images remain at their previous version (1.8.x, 1.9.2, 1.10.2)
+     until the next detach/attach; this is normal Longhorn behavior.
 
 > **Known benign drift after 1.10:** `Service/longhorn-conversion-webhook` is
 > `OutOfSync` because chart 1.10.x removed it; with `prune: false` ArgoCD correctly
 > leaves the orphan in place. Either prune it manually once when convenient or keep
-> it; it's not selected by any pod after upgrade.
+> it; it's not selected by any pod after upgrade. Still present after 1.11.1.
 
-### traefik 36 → 37 → 38 → 39 — **step-2 done 2026-04-24**
+### traefik 36 → 37 → 38 → 39 — **step-3 done 2026-04-24**
 Chart 36.x → 39.x stays on Traefik runtime v3.x; the values schema is largely backward
 compatible across these minors but the chart restructured a few defaults per minor.
 
-1. ~~Bump 36.3.0 → 37.4.0 (runtime v3.4.3 → v3.6.2)~~ ✅ done 2026-04-24, Synced/Healthy,
-   smoke-tests on auth-gated routes returned HTTP 302.
-2. Soak ≥ 3-5 days, watch access logs / `traefik` Service `LoadBalancer` IP.
-3. Bump to 38.x latest stable.
+1. ~~Bump 36.3.0 → 37.4.0 (runtime v3.4.3 → v3.6.2)~~ ✅ done 2026-04-24-step2.
+2. ~~Bump to 38.0.2 (runtime v3.6.6)~~ ✅ done 2026-04-24-step3. **Breaking schema
+   change found**: chart 38 enforces `additionalProperties:false` on
+   `ports.<entryPoint>`, so the top-level `advertisedPort: 4443` we had under
+   `ports.websecure` was rejected. Re-nested it under `ports.websecure.http3:`
+   (the only valid location, which is also the actual semantic intent —
+   it controls `--entryPoints.websecure.http3.advertisedPort` because http3 is
+   enabled). Always check the rendered helm output of the new chart against
+   our values when bumping a chart major; chart 38 added many `# @schema` strict
+   annotations.
+3. Soak ≥ 3-5 days, watch access logs / `traefik` Service `LoadBalancer` IP.
 4. Bump to 39.x latest stable.
 
 ### kube-prometheus-stack 75 → 84 (major chart bumps bundle prometheus-operator CRD updates)
@@ -192,6 +231,31 @@ kubectl -n argocd-qa patch applications.argoproj.io cert-manager --type merge \
 ```
 
 Subsequent patch bumps within v1.18 don't need Replace=true again.
+
+### vault-unseal CronJob — moved into Git + hardened (2026-04-24)
+
+The `vault-unseal` CronJob in the `hashicorpvault` namespace was previously created
+out-of-band with `kubectl apply` and had no representation in Git. During the istio
+sidecar convergence work it was found that Vault had been **sealed for ~18 h**, blocking
+every `vault-agent-init` container in the cluster. Root causes:
+
+1. The original CronJob script used `set -e` *without* `-u`, returned exit-0 even when
+   curl failed, and had no final verification that the seal status had actually flipped.
+   Failures were therefore silent.
+2. `activeDeadlineSeconds: 45` was too short for the slower RPi nodes to pull
+   `curlimages/curl:latest` cold, so half the runs were `DeadlineExceeded`.
+3. The image was unpinned (`:latest`), so a sudden DockerHub pull issue would hang the
+   job.
+
+Fix landed at `hashicorpvault/vault-unseal-cronjob.yaml` (now tracked in Git, will be
+managed by the existing app-of-apps in a follow-up):
+
+- pinned `curlimages/curl@sha256:…` (8.10.1 digest)
+- `set -eu` strict shell, with a 6×5 s readiness loop before unseal
+- explicit "is it really unsealed now?" verification at the end, `exit 1` on failure
+  (so the Job is correctly marked Failed and the next CronJob retry runs)
+- `activeDeadlineSeconds: 120`, `backoffLimit: 2`, resource requests/limits set
+- still needs `vault-unseal-keys` Secret (3 keys, sealed-secrets-managed) — unchanged
 
 ### bootstrap-qa (app-of-apps) revision cache
 
