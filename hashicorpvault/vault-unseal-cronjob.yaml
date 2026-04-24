@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-unseal
+  namespace: hashicorpvault
+  labels:
+    app.kubernetes.io/name: vault-unseal
+    app.kubernetes.io/part-of: hashicorpvault
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: unseal
+              image: curlimages/curl:8.10.1
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef:
+                    name: vault-unseal-keys
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  VAULT_ADDR="http://hashicorpvault.hashicorpvault.svc:8200"
+
+                  # Wait up to 30s for vault API to be reachable (covers slow startups)
+                  for i in $(seq 1 6); do
+                    if curl -sf --max-time 5 "$VAULT_ADDR/v1/sys/seal-status" >/dev/null; then
+                      break
+                    fi
+                    echo "Vault API not reachable yet (attempt $i/6), sleeping 5s"
+                    sleep 5
+                  done
+
+                  STATUS=$(curl -s --max-time 5 "$VAULT_ADDR/v1/sys/seal-status" || true)
+                  if [ -z "$STATUS" ]; then
+                    echo "ERROR: Vault unreachable after wait"
+                    exit 1
+                  fi
+
+                  case "$STATUS" in
+                    *'"sealed":false'*)
+                      echo "Vault is already unsealed"
+                      exit 0
+                      ;;
+                  esac
+
+                  echo "Vault is sealed, unsealing..."
+                  for KEY_VAR in VAULT_UNSEAL_KEY_1 VAULT_UNSEAL_KEY_2 VAULT_UNSEAL_KEY_3; do
+                    eval KEY=\$$KEY_VAR
+                    if [ -z "${KEY:-}" ]; then
+                      echo "ERROR: $KEY_VAR not set in vault-unseal-keys secret"
+                      exit 1
+                    fi
+                    RESP=$(curl -s --max-time 10 \
+                      --request PUT \
+                      --data "{\"key\":\"$KEY\"}" \
+                      "$VAULT_ADDR/v1/sys/unseal" || true)
+                    PROGRESS=$(echo "$RESP" | grep -o '"progress":[0-9]*' || true)
+                    SEALED=$(echo "$RESP" | grep -o '"sealed":[a-z]*' || true)
+                    echo "  $KEY_VAR -> $PROGRESS $SEALED"
+                  done
+
+                  # Verify success — exit non-zero if still sealed so the Job is marked Failed
+                  FINAL=$(curl -s --max-time 5 "$VAULT_ADDR/v1/sys/seal-status" | grep -o '"sealed":[a-z]*' || true)
+                  echo "Final status: $FINAL"
+                  case "$FINAL" in
+                    *'"sealed":false'*)
+                      echo "OK: Vault is unsealed"
+                      exit 0
+                      ;;
+                    *)
+                      echo "FAIL: Vault is still sealed after applying 3 keys"
+                      exit 1
+                      ;;
+                  esac

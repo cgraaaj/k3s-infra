@@ -10,9 +10,11 @@ spec:
   sources:
     - repoURL: https://charts.jetstack.io
       chart: cert-manager
-      targetRevision: v1.19.5
+      targetRevision: v1.20.2
       helm:
-        skipCrds: true
+        # CRDs are now managed by the Helm chart (was skipCrds:true with manual v1.12.10 CRDs).
+        # Pre-existing Issuer/Certificate CRs are forward-compatible across cert-manager.io/v1 schemas.
+        skipCrds: false
         valueFiles:
           - $values/cert-manager/values.yaml
     - repoURL: https://github.com/cgraaaj/k3s-infra.git
@@ -35,8 +37,5 @@ spec:
         duration: 5s
         factor: 2
         maxDuration: 3m
-  ignoreDifferences:
-    - group: apiextensions.k8s.io
-      kind: CustomResourceDefinition
-      jsonPointers:
-        - /spec
+  # Per-app ignoreDifferences for CRDs is no longer needed — covered by cluster-wide argocd-cm
+  # (apiextensions.k8s.io_CustomResourceDefinition rules for caBundle / inject-ca-from / status).
