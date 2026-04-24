@@ -35,13 +35,9 @@ spec:
   syncPolicy:
     syncOptions:
       - CreateNamespace=true
-    # IMPORTANT: the `automated` block is intentionally OMITTED for the duration of the
-    # PG15 -> PG17 + local-path -> longhorn-retain migration (Path B runbook).
-    #
-    # Re-enabling auto-sync is the FINAL step of Phase 7 of the migration; it must NOT
-    # happen until the new PG17 pod is up on longhorn-retain, the SQL dump is restored,
-    # and the authentik server + worker are verified Ready.
-    # See `infra/UPGRADE-ROADMAP.md` ("authentik PG15 -> 17") for the runbook.
+    automated:
+      prune: true
+      selfHeal: true
     retry:
       limit: 3
       backoff:
