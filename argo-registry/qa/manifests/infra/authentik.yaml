@@ -10,10 +10,22 @@ spec:
   sources:
     - repoURL: https://charts.goauthentik.io
       chart: authentik
-      targetRevision: 2025.2.4
+      targetRevision: 2025.12.4
       helm:
         valueFiles:
           - $values/authentik/values.yaml
+        # Inline overrides to land postgres on longhorn-retain instead of local-path.
+        # Done here (not in cgraaaj/k3s-infra values.yaml) so the migration is contained
+        # to a single repo PR. In chart 2025.12.4 the postgres section was restructured
+        # to bitnami subchart layout, so the keys are postgresql.primary.persistence.*
+        # (NOT postgresql.storageClass / postgresql.persistence.storageClass).
+        parameters:
+          - name: postgresql.primary.persistence.enabled
+            value: "true"
+          - name: postgresql.primary.persistence.storageClass
+            value: longhorn-retain
+          - name: postgresql.primary.persistence.size
+            value: 8Gi
     - repoURL: https://github.com/cgraaaj/k3s-infra.git
       targetRevision: master
       ref: values
@@ -23,16 +35,12 @@ spec:
   syncPolicy:
     syncOptions:
       - CreateNamespace=true
-    # IMPORTANT: the `automated` block is intentionally OMITTED.
+    # IMPORTANT: the `automated` block is intentionally OMITTED for the duration of the
+    # PG15 -> PG17 + local-path -> longhorn-retain migration (Path B runbook).
     #
-    # Even with `prune: false` and `selfHeal: false`, the mere presence of an
-    # `automated` block enables ArgoCD auto-sync, which would re-apply the git-pinned
-    # chart `2025.2.4` over the live runtime that has been hand-patched to image
-    # `2025.12.4`. The hand patch is required because the prior 2025.12.4 run already
-    # migrated the DB schema (renamed `authentik_core_authenticatedsession.session_key`
-    # -> `session_id`); the rolled-back 2025.2.4 server crash-loops with
-    # `column ... session_key does not exist`. Only manual sync is safe here until the
-    # PG15 -> PG17 migration AND chart roll-forward to 2025.12.4 are properly executed.
+    # Re-enabling auto-sync is the FINAL step of Phase 7 of the migration; it must NOT
+    # happen until the new PG17 pod is up on longhorn-retain, the SQL dump is restored,
+    # and the authentik server + worker are verified Ready.
     # See `infra/UPGRADE-ROADMAP.md` ("authentik PG15 -> 17") for the runbook.
     retry:
       limit: 3
