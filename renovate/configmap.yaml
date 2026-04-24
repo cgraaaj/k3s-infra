@@ -17,6 +17,6 @@ data:
         "argocd",
         "helm-values",
         "kubernetes",
-        "regex"
+        "custom.regex"
       ]
     }

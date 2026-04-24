@@ -11,13 +11,14 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 600
+      activeDeadlineSeconds: 3600
       template:
         spec:
           restartPolicy: Never
           containers:
             - name: renovate
-              image: renovate/renovate:latest
+              image: renovate/renovate@sha256:2ed9f867ea7a7d2448847ce704f78af09e9b881c63f843a1aa0f590691737c42
+              imagePullPolicy: IfNotPresent
               env:
                 - name: RENOVATE_TOKEN
                   valueFrom:
@@ -28,17 +29,19 @@ spec:
                   value: /config/config.json
                 - name: LOG_LEVEL
                   value: info
+                - name: NODE_OPTIONS
+                  value: "--max-old-space-size=1536"
               volumeMounts:
                 - name: config
                   mountPath: /config
                   readOnly: true
               resources:
                 requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 500m
+                  cpu: 200m
                   memory: 512Mi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi
           volumes:
             - name: config
               configMap:
