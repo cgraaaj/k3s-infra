@@ -24,7 +24,7 @@ merged so the next engineer knows what's in-flight.
 | **cert-manager**              | `v1.18.6` ⬆ from `v1.17.4` | `v1.20.2` | T3-step-1 | `v1.19.5` → `v1.20.2` |
 | **istio-base / istiod / gateway** | `1.25.5` ⬆ from `1.23.6` | `1.29.2` | T3-step-1 (N-2 skip) | `1.27.x` → `1.29.x` |
 | **longhorn**                  | `1.9.2` ⬆ from `1.8.2`  | `1.11.1` | T3-step-1 | `1.10.x` → `1.11.x` |
-| **authentik**                 | `2025.2.4` (rolled back from `2025.12.4`) | `2026.2.2` | — (stuck on `2025.2.4` — see runbook below) | All future authentik bumps gated on Postgres migration |
+| **authentik**                 | git: `2025.2.4` / runtime: `2025.12.4` (rollback failed — see runbook) | `2026.2.2` | — | Roll-forward to `2025.12.4` in git + override PG image to bitnami `15.x`, OR do PG15→17 migration. Until then: `selfHeal: false` on the Application CR. |
 | **traefik**                   | `36.3.0` ⬆ from `34.4.1` | `39.0.8` | T3-step-1 | `37.x` → `38.x` → `39.x` |
 | **kube-prometheus-stack**     | `75.15.2`     | `84.0.0`       | — | T3 — defer, CRD migration needed |
 | **kiali-server**              | `1.89.0`      | `2.25.0`       | — | T3 — v1→v2 full rewrite, defer |
@@ -116,8 +116,41 @@ To move past `2025.2.4` you must migrate the data first:
 **Why automated rollback on this run was non-trivial:** the authentik Application has
 `syncPolicy.automated.selfHeal: true`, which kept pushing the StatefulSet back to the
 new (broken) 2025.12.4 template. We temporarily disabled `selfHeal` on the authentik
-Application CR so the rollback could stick. Re-enable after bootstrap-qa picks up the
-git rollback.
+Application CR so the rollback could stick.
+
+**Critical follow-up finding (post-mortem 2026-04-23 evening):** the chart rollback to
+`2025.2.4` cannot actually take effect, because the brief `2025.12.4` run **already
+migrated the application schema** (notably renamed
+`authentik_core_authenticatedsession.session_key` → `session_id`). The 2025.2.4 server
+container therefore crash-loops with `column ... session_key does not exist` against
+the migrated DB. Two ReplicaSets coexist in the cluster:
+
+| RS | Image | State |
+|----|-------|-------|
+| `authentik-server-7bd5ccc8bc` | `goauthentik/server:2025.2.4` (git desired) | 0/1, fails readiness with the schema error |
+| `authentik-server-84867d7d87` | `goauthentik/server:2025.12.4` (orphan from upgrade) | 1/1 — the only pod actually serving outpost / forward-auth |
+
+If `selfHeal` (or `prune`) is ever turned back on while git is still at `2025.2.4`,
+ArgoCD will GC the only working pod and **all auth-gated apps** (mediaradar, grafana,
+optionscope, argocd, traefik dashboard, etc.) will go dark cluster-wide. `prune` and
+`selfHeal` are therefore both intentionally pinned to `false` in
+`argo-registry/qa/manifests/infra/authentik.yaml` until one of the two paths below is
+executed.
+
+**Recovery options (pick one):**
+
+A. **Roll FORWARD in git to `2025.12.4`** (matches what's actually running) and *override
+   the postgresql image* in `k3s-infra/authentik/values.yaml` so the chart keeps using
+   `bitnami/postgresql:15.8.0-debian-12-r18` instead of `library/postgres:17`. This is the
+   lowest-risk path because no DB migration runs. Then re-enable `selfHeal: true` and
+   `prune: true` on the Application.
+
+B. **Execute the PG15 → PG17 migration** documented above (snapshot, `pg_dumpall`, scale
+   down, recreate PVC, `psql -f`, scale up). After PG17 is live, the rolled-forward
+   chart 2025.12.4 (with stock `library/postgres:17`) will reconcile cleanly.
+
+Until A or B is done, do NOT run `kubectl -n argocd-qa app sync authentik` with
+`Prune=true` or toggle `automated.prune/selfHeal: true`.
 
 ### cert-manager v1.17 → v1.18: needs `Replace=true` sync option
 
