@@ -38,7 +38,10 @@ spec:
               default: true
             http3:
               enabled: true
-            advertisedPort: 4443
+              # In chart 37.x advertisedPort was a top-level websecure escape hatch (loose
+              # schema). Chart 38 enforces strict schema; the only valid location is nested
+              # under http3 (renders --entryPoints.websecure.http3.advertisedPort=4443).
+              advertisedPort: 4443
             tls:
               enabled: true
             forwardedHeaders:
