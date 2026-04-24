@@ -12,9 +12,16 @@ spec:
       chart: cert-manager
       targetRevision: v1.20.2
       helm:
-        # CRDs are now managed by the Helm chart (was skipCrds:true with manual v1.12.10 CRDs).
-        # Pre-existing Issuer/Certificate CRs are forward-compatible across cert-manager.io/v1 schemas.
-        skipCrds: false
+        # In v1.18+ the chart no longer ships CRDs in the legacy `crds/` folder; they are
+        # gated behind `crds.enabled`. Setting both flags here so:
+        #   - enabled=true: chart renders the 6 cert-manager CRDs (replaces our v1.12.10 set)
+        #   - keep=true:    helm.sh/resource-policy=keep, so an uninstall never deletes CRDs
+        #                   (which would cascade-delete every Issuer/Certificate in the cluster).
+        parameters:
+          - name: crds.enabled
+            value: "true"
+          - name: crds.keep
+            value: "true"
         valueFiles:
           - $values/cert-manager/values.yaml
     - repoURL: https://github.com/cgraaaj/k3s-infra.git
