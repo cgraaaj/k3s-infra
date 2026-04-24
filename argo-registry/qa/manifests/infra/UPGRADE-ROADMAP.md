@@ -21,46 +21,71 @@ merged so the next engineer knows what's in-flight.
 | loki-stack                    | `2.10.3`      | `2.10.3`       | — | none |
 | minio                         | `5.4.0`       | `5.4.0`        | — | none |
 | **vault** (hashicorpvault)    | `0.32.0` ⬆ from `0.30.1` | `0.32.0` | T2 | — |
-| **cert-manager**              | `v1.18.6` ⬆ from `v1.17.4` | `v1.20.2` | T3-step-1 | `v1.19.5` → `v1.20.2` |
-| **istio-base / istiod / gateway** | `1.25.5` ⬆ from `1.23.6` | `1.29.2` | T3-step-1 (N-2 skip) | `1.27.x` → `1.29.x` |
-| **longhorn**                  | `1.9.2` ⬆ from `1.8.2`  | `1.11.1` | T3-step-1 | `1.10.x` → `1.11.x` |
+| **cert-manager**              | `v1.19.5` ⬆ from `v1.18.6` (2026-04-24) | `v1.20.2` | T3-step-2 | `v1.20.2` |
+| **istio-base / istiod / gateway** | `1.27.9` ⬆ from `1.25.5` (2026-04-24, N-2 skip 1.26) | `1.29.2` | T3-step-2 (N-2 skip) | `1.29.x` |
+| **longhorn**                  | `1.10.2` ⬆ from `1.9.2` (2026-04-24) | `1.11.1` | T3-step-2 | `1.11.1` |
 | **authentik**                 | `2025.12.4` ⬆ from `2025.2.4` (PG15→17 + local-path→longhorn-retain done 2026-04-24) | `2026.2.2` | T3-step-1 | `2025.12.4` → `2026.2.2` (year-release, see runbook) |
-| **traefik**                   | `36.3.0` ⬆ from `34.4.1` | `39.0.8` | T3-step-1 | `37.x` → `38.x` → `39.x` |
+| **traefik**                   | `37.4.0` ⬆ from `36.3.0` (2026-04-24, runtime v3.4.3 → v3.6.2) | `39.0.8` | T3-step-2 | `38.x` → `39.x` |
 | **kube-prometheus-stack**     | `75.15.2`     | `84.0.0`       | — | T3 — defer, CRD migration needed |
 | **kiali-server**              | `1.89.0`      | `2.25.0`       | — | T3 — v1→v2 full rewrite, defer |
 | **gitlab-runner**             | `0.68.1`      | `0.88.1`       | — | T3 — GitLab Runner 17→18, defer |
 
 ## Runbooks for remaining T3 migrations
 
-### Istio 1.25 → 1.27 → 1.29 (N-2 rule)
+### Istio 1.25 → 1.27 → 1.29 (N-2 rule) — **step-2 done 2026-04-24**
 Istio supports skipping at most 2 minor versions. Sequence:
 
-1. Merge this PR and confirm 1.25.5 is Healthy (watch `istiod` pods, `kubectl get proxy-status`,
-   Kiali dashboard for traffic continuity).
-2. Wait ≥ 1 week on 1.25 in dev before the next step.
-3. Bump all three (`base`, `istiod`, `gateway`) to `1.27.9` in one commit. Gateway last.
-4. Same wait.
-5. Bump to `1.29.2`.
+1. ~~Merge initial PR and confirm 1.25.5 is Healthy~~ ✅ done.
+2. ~~Wait ≥ 1 week on 1.25 in dev before the next step~~ — soak shortened to <1d in dev.
+3. ~~Bump all three (`base`, `istiod`, `gateway`) to `1.27.9` in one commit. Gateway last.~~ ✅ done 2026-04-24, all three Synced/Healthy, CRDs at 1.27.9, smoke-tests `auth.dev`/`mediaradar`/`grafana.dev`/`kiali.dev` returned HTTP 302.
+4. **Soak ≥ 1 week before next step.** Existing sidecars stay at proxyv2:1.25.5 until the workload is restarted (sidecar lazy-injection); confirm via `istioctl proxy-status` per app over the week, then proactively restart deploys to converge them to 1.27.9 sidecars before stepping to 1.29.
+5. Bump to `1.29.2`. Same lockstep + same wait.
 
 **Pre-flight before each step**: `istioctl x precheck` from a pod with `istioctl` installed.
 
-### cert-manager 1.18 → 1.19 → 1.20
+### cert-manager 1.18 → 1.19 → 1.20 — **step-2 done 2026-04-24**
 cert-manager supports N+1 minor bumps directly, but each bump may add/deprecate CRD fields.
 
-1. Confirm 1.18.6 Healthy.
+1. ~~Confirm 1.18.6 Healthy.~~ ✅ done.
 2. **Fix the pre-existing CRD drift first** (cluster still runs v1.12.10 CRDs from a manual
    `kubectl apply` long ago): flip `helm.skipCrds: false` in `cert-manager.yaml`, sync,
-   watch `Certificate`/`Issuer` reconcile.
-3. Bump chart to `v1.19.5`, wait for stability, then `v1.20.2`.
+   watch `Certificate`/`Issuer` reconcile. **Still pending — gating step-3.**
+3. ~~Bump chart to `v1.19.5`~~ ✅ done 2026-04-24 (required `Replace=true` once for the
+   `$retainKeys` SSA issue + delete the immutable `startupapicheck` Job; live deployments
+   running `cert-manager-controller:v1.19.5` and all 9 visible Certificates remain
+   `Ready=True`). Wait for stability, then `v1.20.2`.
 
-### longhorn 1.9 → 1.10 → 1.11
+### longhorn 1.9 → 1.10 → 1.11 — **step-2 done 2026-04-24**
 **Storage — never skip minors**. Each bump requires:
 
-1. Take a [Longhorn backup snapshot](https://longhorn.io/docs/1.11.1/snapshots-and-backups/) of every PV first.
-2. Confirm no volume is in `Detached` or `Degraded` state before the bump.
-3. Bump chart one minor.
-4. Watch `longhorn-manager` pods roll, then `engine-image-*` DaemonSet re-roll.
-5. Test a volume detach/attach cycle before proceeding.
+1. Take a [Longhorn backup snapshot](https://longhorn.io/docs/1.11.1/snapshots-and-backups/)
+   of every PV first. ✅ For 1.10.2: snapshots `pre-110-20260424-1118-*` exist on all
+   7 attached volumes (authentik PG, vault data + audit, grafana, loki, both minio shards),
+   each `readyToUse: true`. Repeat this step before 1.11.x.
+2. Confirm no volume is in `Detached` or `Degraded` state before the bump. (jenkins/jenkins
+   PVC is permanently `Detached/unknown` — ignored as the workload is archived.)
+3. Bump chart one minor. ✅ 1.9.2 → 1.10.2 done 2026-04-24.
+4. Watch `longhorn-manager` pods roll, then `engine-image-*` DaemonSet re-roll. ✅
+   manager DS rolled across all 5 nodes; new engine-image v1.10.2 deploying (3/5 nodes
+   healthy, 2 RPi nodes — invoker/juggernaut — slow on intermittent DNS to
+   `production.cloudflare.docker.com` and still pulling at the time of this commit).
+   Existing volumes stay on their current engine until the next detach/attach cycle.
+5. Test a volume detach/attach cycle before proceeding to 1.11.x.
+
+> **Known benign drift after 1.10:** `Service/longhorn-conversion-webhook` is
+> `OutOfSync` because chart 1.10.x removed it; with `prune: false` ArgoCD correctly
+> leaves the orphan in place. Either prune it manually once when convenient or keep
+> it; it's not selected by any pod after upgrade.
+
+### traefik 36 → 37 → 38 → 39 — **step-2 done 2026-04-24**
+Chart 36.x → 39.x stays on Traefik runtime v3.x; the values schema is largely backward
+compatible across these minors but the chart restructured a few defaults per minor.
+
+1. ~~Bump 36.3.0 → 37.4.0 (runtime v3.4.3 → v3.6.2)~~ ✅ done 2026-04-24, Synced/Healthy,
+   smoke-tests on auth-gated routes returned HTTP 302.
+2. Soak ≥ 3-5 days, watch access logs / `traefik` Service `LoadBalancer` IP.
+3. Bump to 38.x latest stable.
+4. Bump to 39.x latest stable.
 
 ### kube-prometheus-stack 75 → 84 (major chart bumps bundle prometheus-operator CRD updates)
 
