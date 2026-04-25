@@ -7,32 +7,44 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: infrastructure
-  source:
-    repoURL: https://helm.releases.hashicorp.com
-    chart: vault
-    targetRevision: 0.32.0
-    helm:
-      releaseName: hashicorpvault
-      values: |
-        server:
-          dataStorage:
-            enabled: true
-            size: 5Gi
-            mountPath: "/vault/data"
-            storageClass: longhorn-retain
-            accessMode: ReadWriteOnce
-          auditStorage:
-            enabled: true
-            size: 3Gi
-            mountPath: "/vault/audit"
-            storageClass: longhorn-retain
-            accessMode: ReadWriteOnce
+  # Multi-source layout (Argo CD ≥ 2.6):
+  #   1. upstream HashiCorp Vault Helm chart                          (manifest source)
+  #   2. this repo @ master, ref-only                                 (provides $values)
+  #   3. this repo @ master, path=hashicorpvault                      (companion manifests)
+  # The 3rd source absorbs raw YAMLs that have to live next to the chart but aren't part
+  # of it — currently the auto-unseal CronJob and the public IngressRoute. Same pattern
+  # we should standardise for any chart that needs colocated raw manifests (authentik
+  # ingress/middleware, longhorn storageclass, etc.).
+  sources:
+    - repoURL: https://helm.releases.hashicorp.com
+      chart: vault
+      targetRevision: 0.32.0
+      helm:
+        releaseName: hashicorpvault
+        valueFiles:
+          - $values/hashicorpvault/values.yaml
+    - repoURL: https://github.com/cgraaaj/k3s-infra.git
+      targetRevision: master
+      ref: values
+    - repoURL: https://github.com/cgraaaj/k3s-infra.git
+      targetRevision: master
+      path: hashicorpvault
+      directory:
+        recurse: false
+        # Whitelist the manifest files; values.yaml is consumed via $values above and
+        # README.md is documentation. Anything new in this dir must be added here
+        # explicitly so we don't accidentally ship a non-manifest file as a manifest.
+        include: '{vault-unseal-cronjob.yaml,ingress.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: hashicorpvault
   syncPolicy:
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    # prune intentionally OFF: Vault PVs are precious; an accidental git removal of a
+    # chart-rendered resource (e.g. PVC) must NOT cascade-delete data.
     automated:
       prune: false
       selfHeal: true
