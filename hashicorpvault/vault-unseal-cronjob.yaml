@@ -6,7 +6,6 @@ metadata:
   labels:
     app.kubernetes.io/name: vault-unseal
     app.kubernetes.io/part-of: hashicorpvault
-    app.kubernetes.io/managed-by: kubectl
 spec:
   schedule: "* * * * *"
   concurrencyPolicy: Forbid

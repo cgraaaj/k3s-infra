@@ -22,7 +22,7 @@ merged so the next engineer knows what's in-flight.
 | minio                         | `5.4.0`       | `5.4.0`        | — | none |
 | **vault** (hashicorpvault)    | `0.32.0` ⬆ from `0.30.1` | `0.32.0` | T2 | — (StatefulSet image rolls when pod is recycled; auto-unseal CronJob now hardened, see below) |
 | **cert-manager**              | `v1.20.2` ⬆ from `v1.19.5` (2026-04-24, CRDs reconciled v1.12.10 → v1.20.2) | `v1.20.2` | T3-step-3 | — (caught up to latest) |
-| **istio-base / istiod / gateway** | `1.27.9` ⬆ from `1.25.5` (2026-04-24, N-2 skip 1.26) | `1.29.2` | T3-step-2 (N-2 skip) | `1.29.x` — gated on sidecar convergence |
+| **istio-base / istiod / gateway** | `1.27.9` ⬆ from `1.25.5` (2026-04-24, N-2 skip 1.26) | `1.29.2` | T3-step-2 (N-2 skip) | `1.29.x` — data-plane converged 2026-04-26, awaiting `istioctl x precheck` + ≥3-day soak |
 | **longhorn**                  | `1.11.1` ⬆ from `1.10.2` (2026-04-24, snapshots `pre-111-20260424-1244-*` taken) | `1.11.1` | T3-step-3 | — (caught up to latest) |
 | **authentik**                 | `2025.12.4` ⬆ from `2025.2.4` (PG15→17 + local-path→longhorn-retain done 2026-04-24) | `2026.2.2` | T3-step-1 | `2025.12.4` → `2026.2.2` (year-release, see runbook) |
 | **traefik**                   | `38.0.2` ⬆ from `37.4.0` (2026-04-24, runtime v3.6.2 → v3.6.6) | `39.0.8` | T3-step-3 | `38.x` → `39.x` (T2 once soak ends ~2026-04-29) |
@@ -39,86 +39,121 @@ Pulled live from the `dev` k3s cluster (the QA target):
   - `longhorn` `OutOfSync` — expected, the `Service/longhorn-conversion-webhook` orphan documented under "Known benign drift after 1.10".
   - `prometheus` `OutOfSync` — chart not bumped yet (75.15.2 still in Git, see T3 row).
 - **Vault** — `Sealed=false`, runtime `1.20.1`, `vault-unseal` CronJob completing successfully in-cluster.
-- **Istio data-plane** — `istiod` at `pilot:1.27.9`; sidecars: 7 at `proxyv2:1.27.9`, **2 still at `proxyv2:1.23.2`** (both in `stockx/stockx-svc-stockx-svc-k8s-fffc66778-*`). See "Open blockers" below.
-- **`vault-unseal` CronJob Git tracking** — file exists in Git but no Argo `Application` references it; the in-cluster object is still labelled `app.kubernetes.io/managed-by: kubectl`. See "Open blockers" below.
+- **Istio data-plane** — `istiod` at `pilot:1.27.9`; sidecars: 6 × `proxyv2:1.27.9`, **0 × `proxyv2:1.23.2`** (converged 2026-04-26, see B1).
+- **`vault-unseal` CronJob Git tracking** — adopted by Argo CD 2026-04-26 via the new
+  multi-source `hashicorpvault` Application. CronJob and `IngressRoute/hashicorpvault`
+  now show `app.kubernetes.io/instance=hashicorpvault` (Argo tracking label). See B2.
 
-## Open blockers (clear these before any T3 motion)
+## Open blockers (status as of 2026-04-26)
 
-### B1. `stockx-svc` CrashLoop is gating Istio sidecar convergence
+### B1. `stockx-svc` CrashLoop was gating Istio sidecar convergence — **CLEARED 2026-04-26**
 
-`Deployment/stockx-svc-stockx-svc-k8s` in namespace `stockx` is `0/2` Available. All three
-pods are in `CrashLoopBackOff` — the app container `stockx-svc-k8s` (image
-`registry.cgraaaj.in/stock-x/stockx-svc:2.7`) returns HTTP 500 on its readiness probe and
-fails its liveness probe. The rolling-restart we issued on 2026-04-24 to swap sidecars
-from 1.23.2 → 1.27.9 created a new ReplicaSet (`65b6fdd9f8`) whose pod can never go
-Ready, so the rolling update keeps both old `fffc66778`-RS pods alive (still on
-`proxyv2:1.23.2`) to maintain — paradoxically — *zero* availability.
+**What we did.** `Deployment/stockx-svc-stockx-svc-k8s` in namespace `stockx` was `0/2`
+Available with all 3 pods in `CrashLoopBackOff` (app container 500-ing on readiness).
+The 2026-04-24 rolling restart had created a new ReplicaSet (`65b6fdd9f8`) whose pod
+couldn't go Ready, so the old `fffc66778` pods (carrying `proxyv2:1.23.2`) stayed
+alive. We took the workload offline (it already was) to release the stale sidecars:
 
-Until this is resolved we cannot proceed to Istio 1.29 (would put istiod at N-6 from the
-data-plane = mesh-breaking).
+```
+kubectl -n stockx scale deployment/stockx-svc-stockx-svc-k8s --replicas=0
+```
 
-Options, in increasing order of safety:
+**Verification (immediately after):**
 
-1. **Quick / risky** — `kubectl -n stockx scale deploy/stockx-svc-stockx-svc-k8s --replicas=0`
-   then back to `2`. Frees the stale 1.23.2 sidecars immediately; workload stays offline
-   (it already is).
-2. **Correct** — fix the underlying `stockx-svc-k8s` 500. Likely a missing dependency
-   (DB / upstream API / config). Owner: stockx app team. Tracking it here only because
-   it gates the infra upgrade train.
-3. **Enterprise / structural** — give every long-lived `Deployment` a
-   `PodDisruptionBudget` AND a non-zero `progressDeadlineSeconds`, plus an Argo
-   `Application` health-check that surfaces stuck rollouts. We currently rely on
-   "someone notices the Argo dashboard says Degraded", which is what let this sidecar
-   skew develop.
+```
+$ kubectl get pods -A -o jsonpath='...proxyv2...' | sort | uniq -c
+      6 docker.io/istio/proxyv2:1.27.9     # was: 7×1.27.9 + 2×1.23.2
+$ kubectl -n istio-system logs deployment/istiod --tail=5
+... ConnectedEndpoints:6 Version:.../23
+... service stockx-svc-stockx-svc-k8s.stockx.svc.cluster.local has no endpoints
+```
 
-### B2. `vault-unseal` CronJob is not in the GitOps loop
+The mesh data-plane is now homogeneous on `1.27.9`, which unblocks the Istio
+`1.27.9 → 1.29.2` step (no more N-6 risk).
 
-`hashicorpvault/vault-unseal-cronjob.yaml` is committed but no Argo `Application`
-references it, so:
+**Important side-finding (separate concern, NOT a blocker for the upgrade train).**
+The `stockx-svc` Argo Application is in `ComparisonError` since 2026-04-24:
 
-- It is invisible to `bootstrap-qa` (which globs `argo-registry/qa/manifests/**/*.yaml`).
-- The in-cluster object still has `app.kubernetes.io/managed-by: kubectl` — i.e. any
-  drift in the file will not propagate, and an accidental `kubectl delete` would not
-  self-heal.
+```
+Failed to load target state: failed to generate manifest for source 1 of 1:
+rpc error: code = Unknown desc = failed to list refs: authentication required
+```
 
-Two fixes:
+i.e. argocd-repo-server can't auth to `cgraaaj/stockx-svc-k8s` (private repo, missing or
+rotated credential). The upside is it can't revert our `--replicas=0` (it has no desired
+state to compare against). The downside is we have a silently-undeployed app. Owner:
+add a `repository` secret in `argocd-qa` for that repo URL; separate from this roadmap.
 
-1. **Direct (quick)** — add a tiny Argo `Application` at
-   `argo-registry/qa/manifests/infra/vault-unseal.yaml` with
-   `source.repoURL: https://github.com/cgraaaj/k3s-infra.git`, `path: hashicorpvault/`,
-   `destination.namespace: hashicorpvault`. `bootstrap-qa` will pick it up on the next
-   poll. Pros: zero churn on the existing `hashicorpvault` Application. Cons: two
-   Applications now own resources in the same namespace; sync ordering between the
-   chart and the CronJob has to be expressed via sync-waves (give the CronJob `wave: 5`
-   so it lands after the StatefulSet).
-2. **Enterprise / best-practice** — convert `hashicorpvault.yaml` to a **multi-source
-   Application** (Argo CD ≥ 2.6, `spec.sources: [...]`): source 1 = the upstream Helm
-   chart (unchanged), source 2 = `repoURL=k3s-infra`, `path=hashicorpvault/`,
-   `directory.recurse=true`. Pros: one logical Application owns *everything* Vault-
-   related (chart, CronJob, future companion CRs like sealed `vault-unseal-keys` once
-   it moves into Git, audit-log shipping configs, etc.); avoids cross-Application sync
-   coordination; one place to flip `prune`/`selfHeal`/`automated`. Cons: requires a
-   one-time Argo CD `Application` recreate (Argo can't switch a single-source app to
-   multi-source live; delete + re-apply with the finalizer skipped to preserve
-   resources).
+**Enterprise hardening to prevent recurrence (recommended):**
 
-Recommendation: take option (2). The follow-up was already flagged in the
-`vault-unseal CronJob` section below, and a multi-source layout is the right long-term
-home for "chart + companion manifests" patterns we'll re-encounter (e.g. authentik
-outpost overlays, longhorn `RecurringJob` CRs).
+- Add Prometheus alert: `count by (image) (kube_pod_container_info{container="istio-proxy"}) > 1`
+  for ≥ 30 min → page (catches mixed sidecar versions early).
+- Add Argo CD Notifications webhook for `app-degraded` and `app-sync-status-unknown`
+  (we relied on dashboard polling, which is how we missed both the stockx CrashLoop and
+  the repo-auth failure for ~2 days).
+- Standardise on `progressDeadlineSeconds: 600` + a `PodDisruptionBudget` for every
+  long-lived Deployment so a stuck rollout is loud, not invisible.
+
+### B2. `vault-unseal` CronJob now in the GitOps loop — **CLEARED 2026-04-26**
+
+**What we did.** Converted `argo-registry/qa/manifests/infra/hashicorpvault.yaml` to a
+**3-source** Argo Application (chart + `$values` ref + `path: hashicorpvault` raw
+manifests with an explicit include whitelist). `bootstrap-qa` reconciled the change
+in-place via SSA — no Application delete/recreate was needed.
+
+**Verification (immediately after):**
+
+```
+$ kubectl -n argocd-qa get app hashicorpvault \
+    -o jsonpath='sync={.status.sync.status} health={.status.health.status}'
+sync=Synced health=Healthy
+
+$ kubectl -n argocd-qa get app hashicorpvault \
+    -o jsonpath='{range .status.resources[*]}{.kind}/{.name}{"\n"}{end}' | sort -u
+ClusterRole/hashicorpvault-agent-injector-clusterrole
+ClusterRoleBinding/hashicorpvault-agent-injector-binding
+ClusterRoleBinding/hashicorpvault-server-binding
+ConfigMap/hashicorpvault-config
+CronJob/vault-unseal                       ← adopted, was managed-by:kubectl
+Deployment/hashicorpvault-agent-injector
+IngressRoute/hashicorpvault                ← adopted, was unmanaged
+MutatingWebhookConfiguration/hashicorpvault-agent-injector-cfg
+Service/hashicorpvault
+Service/hashicorpvault-agent-injector-svc
+Service/hashicorpvault-internal
+ServiceAccount/hashicorpvault
+ServiceAccount/hashicorpvault-agent-injector
+StatefulSet/hashicorpvault
+
+$ kubectl -n hashicorpvault get cronjob vault-unseal -o jsonpath='{.metadata.labels}'
+{"app.kubernetes.io/instance":"hashicorpvault", ...}    # tracking label present
+
+$ kubectl -n hashicorpvault get jobs --sort-by=.metadata.creationTimestamp | tail -1
+vault-unseal-29619136   Complete   1/1   5s   42s   # CronJob still running cleanly
+```
+
+Vault stayed `Sealed=false` throughout the conversion. No StatefulSet restart, no PVC
+churn. The 3-source layout (chart + `$values` ref + raw companion manifests) is the
+**recommended pattern** for any future chart that needs colocated raw manifests; we
+should retro-apply it to `authentik` (latent `ingress.yaml`/`middleware.yaml`),
+`longhorn` (`storageclass.yaml`), and `cert-manager` (`certificates/`, `issuers/`)
+which currently have the same drift problem (companion manifests in the repo but no
+Argo source claiming them).
 
 ## What's next — priority queue
 
 | # | Tier | Action | Gate / pre-condition |
 |---|------|--------|----------------------|
-| 1 | n/a  | **B1** — unblock stockx-svc OR scale to 0 to release stale 1.23.2 sidecars | none — do this first |
-| 2 | n/a  | **B2** — wire `vault-unseal` CronJob into Argo (multi-source `hashicorpvault` app preferred) | none — independent of (1) |
-| 3 | T2   | Traefik `38.0.2` → `39.x`                                                   | soak ends ≈ 2026-04-29; re-diff `helm template` because chart 39 likely tightens more `additionalProperties:false` schemas |
-| 4 | T3   | Istio `1.27.9` → `1.29.2` (base/istiod/gateway lockstep, gateway last)      | (1) cleared AND `istioctl x precheck` clean |
-| 5 | T3   | Authentik `2025.12.4` → `2026.2.x`                                          | take Longhorn snapshot of `data-authentik-postgresql-0` first |
-| 6 | T3   | kube-prometheus-stack `75.15.2` → `84.0.0`, staged 75→80→82→84              | CRD diff per step; verify `up{}` after each |
-| 7 | T3   | kiali-server `1.89.0` → `2.x` (re-authored values)                          | best done after (6); kiali 2 expects newer prom-operator CRDs |
-| 8 | T3   | gitlab-runner `0.68.1` → `0.88.1`, via `0.80.x`                             | review GitLab Runner 18.0 / 18.6 release notes |
+| ~~1~~ | ~~n/a~~  | ~~**B1** — release stale 1.23.2 sidecars on stockx~~ ✅ done 2026-04-26 | — |
+| ~~2~~ | ~~n/a~~  | ~~**B2** — wire `vault-unseal` CronJob into Argo~~ ✅ done 2026-04-26 (multi-source) | — |
+| 1 | T3   | Istio `1.27.9` → `1.29.2` (base/istiod/gateway lockstep, gateway last)      | install `istioctl 1.29.2` locally, run `istioctl x precheck`, then bump |
+| 2 | T2   | Traefik `38.0.2` → `39.x`                                                   | soak ends ≈ 2026-04-29; re-diff `helm template` because chart 39 likely tightens more `additionalProperties:false` schemas |
+| 3 | T3   | Authentik `2025.12.4` → `2026.2.x`                                          | take Longhorn snapshot of `data-authentik-postgresql-0` first |
+| 4 | T3   | kube-prometheus-stack `75.15.2` → `84.0.0`, staged 75→80→82→84              | CRD diff per step; verify `up{}` after each |
+| 5 | T3   | kiali-server `1.89.0` → `2.x` (re-authored values)                          | best done after (4); kiali 2 expects newer prom-operator CRDs |
+| 6 | T3   | gitlab-runner `0.68.1` → `0.88.1`, via `0.80.x`                             | review GitLab Runner 18.0 / 18.6 release notes |
+| Sx | side | `stockx-svc` Argo Application `ComparisonError` (repo auth missing)         | add `repository` Secret in `argocd-qa` for `cgraaaj/stockx-svc-k8s.git`; not part of upgrade train but blocks redeploys |
+| Sx | side | Retro-apply 3-source pattern to authentik / longhorn / cert-manager so their colocated companion manifests stop being kubectl-drifted | track as separate PR per chart |
 
 ## Runbooks for remaining T3 migrations
 
@@ -128,25 +163,23 @@ Istio supports skipping at most 2 minor versions. Sequence:
 1. ~~Merge initial PR and confirm 1.25.5 is Healthy~~ ✅ done.
 2. ~~Wait ≥ 1 week on 1.25 in dev before the next step~~ — soak shortened to <1d in dev.
 3. ~~Bump all three (`base`, `istiod`, `gateway`) to `1.27.9` in one commit. Gateway last.~~ ✅ done 2026-04-24, all three Synced/Healthy, CRDs at 1.27.9, smoke-tests `auth.dev`/`mediaradar`/`grafana.dev`/`kiali.dev` returned HTTP 302.
-4. **Sidecar convergence (gating step for 1.29)** — STARTED 2026-04-24, **STILL OPEN as
-   of 2026-04-26**. Discovered that existing app sidecars were at `proxyv2:1.23.2`
-   (already N-4 from istiod 1.27.9 — outside the supported skew, only working because
-   xDS is forward-tolerant). Initiated `kubectl rollout restart deployment` on all 5
-   injected workloads (`mediaradar/mediaradar-mr-k8s`, `mediaradar-svc/mediaradar-svc-k8s`,
-   `optionscope/optionscope-optionscope-k8s`, `stockx/stockx-svc-stockx-svc-k8s`,
-   `tickerflow/tickerflow-k8s`). New pods inject sidecars at `proxyv2:1.27.9`; old pods
-   continue serving until new are Ready. The `mediaradar-mr-k8s` Deployment had
-   `replicas:1` with `maxUnavailable:25%` (rounded down to 0) so the rollout deadlocked
-   until the old pod was deleted manually — note for future restarts. Initial blockage
-   was slow `vault-agent-init` waiting on a sealed Vault (now resolved, Vault unsealed).
-   **Residual as of 2026-04-26**: cluster still has `7 × proxyv2:1.27.9` and
-   `2 × proxyv2:1.23.2`. Both stale sidecars are in
-   `stockx/stockx-svc-stockx-svc-k8s-fffc66778-{g6ls7,qkznz}` (old ReplicaSet kept alive
-   because the new RS pod cannot pass readiness — the app container 500s; see "Open
-   blockers / B1"). Until ALL sidecars are at 1.27.9, do **not** step istiod to 1.29
-   (would put istiod at N-6 from data-plane = mesh-breaking).
-5. Bump to `1.29.2` once `kubectl get pods -A -o jsonpath='...istio-proxy...'` shows zero
-   1.23.2 sidecars. Same lockstep (base/istiod/gateway, gateway last) + same soak.
+4. ~~**Sidecar convergence (gating step for 1.29)**~~ ✅ done 2026-04-26. Initial restart
+   on 2026-04-24 swapped 4 of 5 injected workloads to `proxyv2:1.27.9`; the 5th
+   (`stockx/stockx-svc-stockx-svc-k8s`) was stuck because the app container itself
+   was crashing on readiness, so the rolling update kept the old `fffc66778` pods
+   (carrying `proxyv2:1.23.2`) alive. Resolved by `kubectl scale --replicas=0` on the
+   stockx Deployment (workload was already `0/2 Available`, so no SLO impact). The
+   `mediaradar-mr-k8s` Deployment had a similar issue earlier in this window:
+   `replicas:1` with `maxUnavailable:25%` rounded down to 0 deadlocked the rollout
+   until the old pod was manually deleted — keep this in mind for any future
+   single-replica injected Deployment.
+
+   **Verified state (2026-04-26):** `0 × proxyv2:1.23.2`, `6 × proxyv2:1.27.9`, istiod
+   reports `ConnectedEndpoints:6` cleanly. Mesh is data-plane-clear for the 1.29 step.
+5. Bump to `1.29.2` once `istioctl x precheck` (1.29.2 binary) is clean. Same lockstep
+   (base/istiod/gateway, gateway last), same ≥1-week soak. **Note**: the local
+   `istioctl` binary needs installing first (`istioctl not found` on the operator
+   workstation as of 2026-04-26).
 
 **Pre-flight before each step**: `istioctl x precheck` from a pod with `istioctl` installed.
 
