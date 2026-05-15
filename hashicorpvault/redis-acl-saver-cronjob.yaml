@@ -1,0 +1,208 @@
+---
+# Redis ACL persistence CronJob.
+#
+# WHY: Redis 7 only persists ACL state to disk on `ACL SAVE` or
+# `CONFIG REWRITE`. AOF/RDB snapshots do NOT include users. When Vault's
+# database secrets engine creates / updates users via `ACL SETUSER`, those
+# users live only in memory until something calls `ACL SAVE`. A Redis
+# restart then loads the on-disk `users.acl` and silently wipes any
+# user that was never persisted, producing the recurring `WRONGPASS`
+# pattern seen on `mediaradar-svc` in May 2026.
+#
+# This CronJob runs every 5 minutes, fetches a Redis admin credential from
+# Vault via the agent injector (no secrets in git), and runs `ACL SAVE`.
+# Idempotent and cheap; it is a no-op when ACLs are already in sync.
+#
+# Prereqs (one-time, see ../hashicorpvault/README.md):
+#   1. KV v2 path `kv-v2/data/redis/admin` with username + password
+#   2. Vault policy `redis-admin-read`:
+#        path "kv-v2/data/redis/admin" { capabilities = ["read"] }
+#   3. Kubernetes auth role `redis-acl-saver-role` bound to this SA
+#      and granting `redis-admin-read`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-acl-saver
+  namespace: hashicorpvault
+  labels:
+    app.kubernetes.io/name: redis-acl-saver
+    app.kubernetes.io/part-of: hashicorpvault
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-acl-saver
+  namespace: hashicorpvault
+  labels:
+    app.kubernetes.io/name: redis-acl-saver
+    app.kubernetes.io/part-of: hashicorpvault
+spec:
+  # Every 5 minutes. The blast radius of a Redis restart between two SAVEs
+  # is bounded to ~5 min of un-persisted ACL changes, which in practice
+  # means at most one Vault rotation window.
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 60
+      backoffLimit: 1
+      template:
+        metadata:
+          annotations:
+            # Pull admin creds from Vault — no static secret in git.
+            vault.hashicorp.com/agent-inject: "true"
+            vault.hashicorp.com/agent-inject-vault-addr: "http://hashicorpvault.hashicorpvault.svc:8200"
+            vault.hashicorp.com/role: "redis-acl-saver-role"
+            vault.hashicorp.com/agent-pre-populate-only: "true"
+            vault.hashicorp.com/agent-inject-secret-admin.env: "kv-v2/data/redis/admin"
+            vault.hashicorp.com/agent-inject-template-admin.env: |
+              {{- with secret "kv-v2/data/redis/admin" -}}
+              REDIS_ADMIN_USERNAME="{{ .Data.data.username }}"
+              REDIS_ADMIN_PASSWORD="{{ .Data.data.password }}"
+              REDIS_HOST="{{ .Data.data.host | default "10.19.94.72" }}"
+              REDIS_PORT="{{ .Data.data.port | default "6379" }}"
+              {{- end }}
+            vault.hashicorp.com/agent-limits-cpu: "100m"
+            vault.hashicorp.com/agent-limits-mem: "64Mi"
+            vault.hashicorp.com/agent-requests-cpu: "10m"
+            vault.hashicorp.com/agent-requests-mem: "32Mi"
+        spec:
+          serviceAccountName: redis-acl-saver
+          restartPolicy: OnFailure
+          containers:
+            - name: acl-save
+              image: redis:7.4-alpine
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests: { cpu: 10m, memory: 16Mi }
+                limits:   { cpu: 100m, memory: 64Mi }
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  set -eu
+                  . /vault/secrets/admin.env
+                  : "${REDIS_HOST:?REDIS_HOST not provided by Vault}"
+                  : "${REDIS_PORT:?REDIS_PORT not provided by Vault}"
+                  : "${REDIS_ADMIN_USERNAME:?username missing}"
+                  : "${REDIS_ADMIN_PASSWORD:?password missing}"
+
+                  # Use --no-auth-warning so logs stay readable.
+                  CLI="redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} \
+                        --user ${REDIS_ADMIN_USERNAME} \
+                        -a ${REDIS_ADMIN_PASSWORD} --no-auth-warning"
+
+                  # Sanity: connection works at all (fail fast otherwise).
+                  if ! $CLI PING | grep -q PONG; then
+                    echo "FAIL: cannot reach Redis at ${REDIS_HOST}:${REDIS_PORT}"
+                    exit 1
+                  fi
+
+                  USERS_BEFORE=$($CLI ACL USERS | wc -l | tr -d ' ')
+                  RESULT=$($CLI ACL SAVE)
+                  if [ "$RESULT" != "OK" ]; then
+                    echo "FAIL: ACL SAVE returned: $RESULT"
+                    exit 1
+                  fi
+                  echo "OK: ACL SAVE persisted ${USERS_BEFORE} users to disk"
+---
+# Black-box test: does the Vault-issued static-creds password actually
+# authenticate against Redis right now? When this job's most recent run
+# is FAILED, the alert `MediaradarSvcRedisCredsDrift` fires within 10
+# minutes — well before the next user-visible WRONGPASS storm.
+#
+# Why this exists: Vault's database engine considers a rotation
+# "successful" the moment its API call returns OK, but the actual
+# truth-table is on Redis. Network blips, plugin bugs (RESP3, see
+# README.md), and out-of-band ACL edits all create silent drift that
+# only surfaces when a pod next reads its creds. This job closes the
+# loop by exercising the contract end-to-end every 5 minutes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-redis-creds-verifier
+  namespace: hashicorpvault
+  labels:
+    app.kubernetes.io/name: vault-redis-creds-verifier
+    app.kubernetes.io/part-of: hashicorpvault
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-redis-creds-verifier
+  namespace: hashicorpvault
+  labels:
+    app.kubernetes.io/name: vault-redis-creds-verifier
+    app.kubernetes.io/part-of: hashicorpvault
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 60
+      backoffLimit: 0
+      template:
+        metadata:
+          annotations:
+            vault.hashicorp.com/agent-inject: "true"
+            vault.hashicorp.com/agent-inject-vault-addr: "http://hashicorpvault.hashicorpvault.svc:8200"
+            vault.hashicorp.com/role: "vault-redis-creds-verifier-role"
+            vault.hashicorp.com/agent-pre-populate-only: "true"
+            # Pull the SAME secret mediaradar-svc consumes — this is the
+            # contract under test, do not point it elsewhere.
+            vault.hashicorp.com/agent-inject-secret-creds.env: "database/static-creds/redis-mediaradar-svc"
+            vault.hashicorp.com/agent-inject-template-creds.env: |
+              {{- with secret "database/static-creds/redis-mediaradar-svc" -}}
+              REDIS_USERNAME="{{ .Data.username }}"
+              REDIS_PASSWORD="{{ .Data.password }}"
+              {{- end }}
+            vault.hashicorp.com/agent-limits-cpu: "100m"
+            vault.hashicorp.com/agent-limits-mem: "64Mi"
+            vault.hashicorp.com/agent-requests-cpu: "10m"
+            vault.hashicorp.com/agent-requests-mem: "32Mi"
+        spec:
+          serviceAccountName: vault-redis-creds-verifier
+          restartPolicy: Never
+          containers:
+            - name: verify
+              image: redis:7.4-alpine
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: REDIS_HOST
+                  value: "10.19.94.72"
+                - name: REDIS_PORT
+                  value: "6379"
+              resources:
+                requests: { cpu: 10m, memory: 16Mi }
+                limits:   { cpu: 100m, memory: 64Mi }
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  set -eu
+                  . /vault/secrets/creds.env
+                  : "${REDIS_USERNAME:?vault returned empty username}"
+                  : "${REDIS_PASSWORD:?vault returned empty password}"
+
+                  REPLY=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" \
+                            --user "$REDIS_USERNAME" -a "$REDIS_PASSWORD" \
+                            --no-auth-warning PING 2>&1 || true)
+                  case "$REPLY" in
+                    PONG)
+                      echo "OK: vault static-creds AUTH ok against Redis (${REDIS_USERNAME})"
+                      exit 0
+                      ;;
+                    *WRONGPASS*|*NOAUTH*|*"user is disabled"*)
+                      echo "FAIL: drift detected — Vault password does not authenticate against Redis"
+                      echo "Reply: $REPLY"
+                      exit 1
+                      ;;
+                    *)
+                      echo "FAIL: unexpected Redis reply: $REPLY"
+                      exit 2
+                      ;;
+                  esac

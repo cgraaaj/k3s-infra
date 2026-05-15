@@ -1,0 +1,122 @@
+---
+# Alerts for the Vault static-creds <-> Redis rotation contract.
+#
+# Source-of-truth signal: the `vault-redis-creds-verifier` CronJob in
+# the `hashicorpvault` namespace. It runs every 5 minutes and fails the
+# whole Job whenever the password Vault is currently serving does NOT
+# successfully AUTH against Redis. We alert on that Job's recent
+# failure count rather than scraping log lines, so it works even when
+# Loki is degraded.
+#
+# Companion job `redis-acl-saver` persists Redis ACL state to disk; if
+# its last run failed, manually-recreated users (e.g. during an
+# incident) will not survive a Redis restart, which is the precondition
+# for the original "WRONGPASS" outage. We alert on that too.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vault-redis-rotation
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: vault-redis-rotation
+      interval: 60s
+      rules:
+        # Direct rotation drift: the Vault-issued password is no longer
+        # accepted by Redis. This is the alert that would have caught
+        # the May-2026 mediaradar-svc incident in <10 minutes instead
+        # of "until a user complains".
+        - alert: MediaradarSvcRedisCredsDrift
+          expr: |
+            kube_job_failed{namespace="hashicorpvault", job_name=~"vault-redis-creds-verifier-.*"} > 0
+          for: 10m
+          labels:
+            severity: critical
+            component: vault
+            service: mediaradar-svc
+          annotations:
+            summary: "Vault password for `mediaradar-svc-app` no longer authenticates against Redis"
+            description: |
+              The black-box verifier `vault-redis-creds-verifier` has
+              failed for at least 10 minutes. This means the password
+              Vault is currently serving to `mediaradar-svc` will not
+              AUTH against Redis — the next pod restart will produce
+              the WRONGPASS error storm.
+
+              Runbook: hashicorpvault/README.md
+              -> "Recovering from WRONGPASS on mediaradar-svc"
+
+              Likely cause:
+                a) Redis ACL `mediaradar-svc-app` user missing or wrong
+                   (Redis restarted without persisted ACLs).
+                b) Vault `database/config/redis` plugin failing to
+                   rotate (RESP3 protocol error — fix in Vault config).
+
+        # Same signal but tighter: fires after one missed run. Used as
+        # a warning so you see the problem before customers do, but
+        # don't get paged in the middle of the night for a single
+        # transient blip.
+        - alert: MediaradarSvcRedisCredsDriftWarning
+          expr: |
+            kube_job_failed{namespace="hashicorpvault", job_name=~"vault-redis-creds-verifier-.*"} > 0
+          for: 0m
+          labels:
+            severity: warning
+            component: vault
+            service: mediaradar-svc
+          annotations:
+            summary: "Vault static-creds verifier failed once for redis-mediaradar-svc"
+            description: |
+              `vault-redis-creds-verifier` failed its most recent run.
+              Will escalate to critical (`MediaradarSvcRedisCredsDrift`)
+              if it stays failed for 10 minutes. Investigate now if you
+              can — the runbook is in hashicorpvault/README.md.
+
+        # ACL persistence: if SAVE keeps failing, Redis is still
+        # functional but a restart will re-introduce the WRONGPASS
+        # condition. Page during business hours, not at 3am.
+        - alert: RedisAclSaverFailing
+          expr: |
+            kube_job_failed{namespace="hashicorpvault", job_name=~"redis-acl-saver-.*"} > 0
+          for: 30m
+          labels:
+            severity: warning
+            component: redis
+          annotations:
+            summary: "Redis ACL persistence (ACL SAVE) has been failing for 30m"
+            description: |
+              The `redis-acl-saver` CronJob has been failing for 30
+              minutes. Redis is still serving traffic, but any user
+              created or rotated by Vault since the last successful
+              save will be lost on the next Redis restart, recreating
+              the conditions that caused the May-2026 outage.
+
+              Check:
+                - Vault path `kv-v2/data/redis/admin` (admin creds)
+                - Redis user `cgraaaj` still has +@admin
+                - CronJob logs: kubectl logs -n hashicorpvault \
+                    -l app.kubernetes.io/name=redis-acl-saver --tail=100
+
+        # Catch-all in case the verifier itself stops scheduling
+        # (e.g. CronJob suspended, controller down). 30 minutes is
+        # the worst-case wait for a "things look quiet" false sense
+        # of safety.
+        - alert: VaultRedisVerifierStale
+          expr: |
+            time() - kube_cronjob_status_last_schedule_time{
+              namespace="hashicorpvault",
+              cronjob="vault-redis-creds-verifier"
+            } > 30 * 60
+          for: 5m
+          labels:
+            severity: warning
+            component: monitoring
+          annotations:
+            summary: "vault-redis-creds-verifier hasn't scheduled in >30 minutes"
+            description: |
+              The verifier CronJob hasn't run in over 30 minutes, so
+              the `MediaradarSvcRedisCredsDrift` alert is effectively
+              blind. Check CronJob status:
+                kubectl get cronjob -n hashicorpvault vault-redis-creds-verifier

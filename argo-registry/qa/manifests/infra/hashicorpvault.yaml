@@ -34,7 +34,7 @@ spec:
         # Whitelist the manifest files; values.yaml is consumed via $values above and
         # README.md is documentation. Anything new in this dir must be added here
         # explicitly so we don't accidentally ship a non-manifest file as a manifest.
-        include: '{vault-unseal-cronjob.yaml,ingress.yaml}'
+        include: '{vault-unseal-cronjob.yaml,ingress.yaml,redis-acl-saver-cronjob.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: hashicorpvault
