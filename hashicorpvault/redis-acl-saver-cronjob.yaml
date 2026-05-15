@@ -62,8 +62,8 @@ spec:
               {{- with secret "kv-v2/data/redis/admin" -}}
               REDIS_ADMIN_USERNAME="{{ .Data.data.username }}"
               REDIS_ADMIN_PASSWORD="{{ .Data.data.password }}"
-              REDIS_HOST="{{ .Data.data.host | default "10.19.94.72" }}"
-              REDIS_PORT="{{ .Data.data.port | default "6379" }}"
+              REDIS_HOST="{{ .Data.data.host }}"
+              REDIS_PORT="{{ .Data.data.port }}"
               {{- end }}
             vault.hashicorp.com/agent-limits-cpu: "100m"
             vault.hashicorp.com/agent-limits-mem: "64Mi"
